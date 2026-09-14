@@ -35,4 +35,23 @@ class ChatRequestTest {
         assertThrows(NullPointerException.class, () -> ChatMessage.user(null));
         assertEquals("", ChatMessage.assistant("").text());
     }
+
+    @Test
+    void toolDefinitionsAndContentAreImmutableAndRoleBoundariesAreChecked() {
+        var tool = new ToolDefinition("lookup", "", "{\"type\":\"object\"}");
+        var tools = new ArrayList<>(List.of(tool));
+        var request = new ChatRequest(List.of(ChatMessage.user("x")), null, tools);
+        tools.clear();
+        assertEquals(List.of(tool), request.tools());
+        assertThrows(UnsupportedOperationException.class, () -> request.tools().clear());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ChatRequest(request.messages(), null, List.of(tool, tool)));
+        var call = new ContentBlock.ToolCall("a", "lookup", "{}");
+        assertThrows(IllegalArgumentException.class,
+                () -> new ChatMessage(ChatMessage.Role.USER, List.of(call), null));
+        assertThrows(IllegalArgumentException.class, () -> ChatMessage.toolResult("", "result"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ChatMessage(ChatMessage.Role.ASSISTANT, List.of(call), "unexpected"));
+        assertEquals("a", ChatMessage.toolResult("a", "result").toolCallId());
+    }
 }

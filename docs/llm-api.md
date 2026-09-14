@@ -14,7 +14,7 @@ LLM 服务对应用暴露的是 HTTP 接口。请求中的 `messages` 是有顺�
 
 ## 先区分协议与厂商
 
-当前实现的是 OpenAI Chat Completions 协议的纯文本子集，支持完整响应和流式调用。本文先说明非流式请求；SSE 的增量、结束与取消语义见 [流式接口](streaming.md)。一个兼容服务可使用同一适配器并配置不同的完整接口 URL、密钥和模型 ID，但必须实际支持所发送的字段。
+当前实现的是 OpenAI Chat Completions 协议的文本与 function 工具调用子集，支持完整响应和流式调用。本文先说明非流式请求；SSE 的增量、结束与取消语义见 [流式接口](streaming.md)。一个兼容服务可使用同一适配器并配置不同的完整接口 URL、密钥和模型 ID，但必须实际支持所发送的字段。
 
 Anthropic Messages、Gemini generateContent、OpenAI Responses 是不同协议，应分别编写适配器；只修改地址并不能使当前实现自动支持它们。后续通过对比协议，逐步判断公共抽象是否需要扩展。
 
@@ -71,7 +71,7 @@ Accept: application/json
 - `content_filter`：受内容过滤影响，不能视作普通完成。
 - 其他结束原因保留原值，调用方不要只判断“有没有文本”。
 
-协议允许 `content: null`，例如出现工具调用、拒绝或过滤结果。当前抽象仅承载纯文本：非流式响应中的工具调用、非 null 的 `refusal`、缺失或非字符串的内容均抛出 `ModelProtocolException`，表示当前实现无法承载此响应，而不意味着服务端一定违反协议。流式 `delta.content` 缺省或 null 则可表示本事件没有新增文本。后续应扩展响应类型，分别表达文本、拒绝与工具调用。
+协议允许 `content: null`。当前实现将文本映射为 `ContentBlock.Text`，将 `tool_calls` 映射为 `ContentBlock.ToolCall`；只有工具调用时文本可为 null。`ChatResponse.text()` 仍可提取拼接文本，`toolCalls()` 获取工具调用列表。拒绝响应和已弃用的 `function_call` 仍明确报错。流式 `delta.content` 缺省或 null 表示该事件没有新增文本。工具协议与结果回填见 [模型事件与工具内容块](model-events.md)。
 
 适配器只接受一个 choice，不静默丢弃多个候选。允许额外的响应字段和空字符串文本；对缺失的必要字段、不合法的 JSON、错误类型或负数用量明确报错。
 

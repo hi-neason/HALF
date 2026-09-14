@@ -2,11 +2,17 @@ package io.github.hi.neason.half.model;
 
 import java.io.IOException;
 import java.util.function.Consumer;
+import java.util.concurrent.Flow;
 
 /** 模型的最小抽象：输入消息，得到一次完整响应；不维护会话或推进 Agent 循环。 */
 @FunctionalInterface
 public interface ChatModel {
     ChatResponse chat(ChatRequest request) throws IOException, InterruptedException;
+
+    /** 冷流：每次订阅独立调用模型，正数 request(n) 后才开始请求；取消停止该次调用。 */
+    default Flow.Publisher<ModelEvent> stream(ChatRequest request) {
+        throw new UnsupportedOperationException("This model does not support streaming");
+    }
 
     /**
      * 阻塞至流结束，按序回调非空文本增量并返回完整响应。

@@ -17,9 +17,9 @@ HALF 是一个计划使用 Java 开发的轻量级 harness agent 框架，负责
 
 ## 当前状态
 
-第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions 纯文本适配器，支持完整响应与 SSE 流式调用。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
+第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions 文本与工具调用适配器，支持完整响应与 SSE 流式调用。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
 
-当前支持有序文本消息、可选 token 上限、文本增量回调、完整响应汇总、结束原因、用量解析和明确的错误分类。流式调用有总时限并支持调用线程中断。工具调用、其他协议的适配器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
+当前支持结构化内容块、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具执行器、其他协议的适配器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
 
 ## 构建与运行
 
@@ -41,6 +41,9 @@ mvn compile exec:java -Dexec.args="用一句话解释 LLM 的消息历史"
 
 # 边接收边输出文本，结束后打印结束原因与用量
 mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
+
+# 订阅结构化事件，每处理一条再 request(1)
+mvn compile exec:java -Dexec.args="--events 用一句话解释背压"
 ```
 
 该示例会实际调用配置的模型服务。仅用本地测试时无需设置上述变量。
@@ -55,7 +58,7 @@ mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
 
 1. 学习 HTTP/JSON 协议，自行实现模型接口与首个协议适配器（当前阶段）。
 2. 比较其他供应商协议，扩展适配器与流式响应，理解哪些能力可以统一抽象。
-3. 扩展工具调用消息与结果，构建可测试的 Agent 循环。
+3. 在已有工具调用消息与结果回填的基础上，构建可测试的 Agent 循环。
 4. 加入工具注册与执行、轮次上限和执行策略。
 5. 根据学习需求扩展上下文管理、会话持久化和多 Agent 协作。
 
@@ -65,3 +68,5 @@ mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
 - [架构草案](docs/architecture.md)
 - [第一步：LLM 接口协议与模型抽象](docs/llm-api.md)
 - [流式接口：SSE 分帧与文本增量](docs/streaming.md)
+
+- [结构化事件、订阅需求量与工具内容块](docs/model-events.md)

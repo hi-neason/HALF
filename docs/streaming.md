@@ -1,6 +1,8 @@
 # 流式接口：SSE 分帧与文本增量
 
-## Java 接口
+## 文本便捷接口
+
+上层需要订阅、控制需求量或接收工具事件时，使用 `Flow.Publisher<ModelEvent> stream(request)`，详见 [结构化事件接口](model-events.md)。下面的文本回调方法保留用于简单调用，内部订阅同一事件流。
 
 ```java
 ChatResponse response = model.stream(request, delta -> {
@@ -11,7 +13,7 @@ ChatResponse response = model.stream(request, delta -> {
 System.out.println(response.finishReason());
 ```
 
-`ChatModel.stream` 阻塞至协议正常结束或发生错误。文本增量以非空字符串按顺序回调；角色、空 delta、用量块不会作为文本回调。返回的 `ChatResponse.text()` 是所有已交付增量的拼接。
+`ChatModel.stream` 阻塞至协议正常结束或发生错误。文本增量以非空字符串按顺序回调；角色、空 delta、用量和工具参数不会作为文本回调，工具调用仍保留在最终响应中。返回的 `ChatResponse.text()` 是所有已交付增量的拼接。
 
 `chat()` 仍返回一次完整响应。`ChatModel` 保留函数式接口能力，未实现流式方法的模型会抛出 `UnsupportedOperationException`，不会用一次普通调用模拟流式输出。
 
@@ -21,7 +23,8 @@ System.out.println(response.finishReason());
 HTTP 字节片段
   → JDK UTF-8 解码与分行
   → SseParser：空行结束一个事件，多行 data 合并
-  → OpenAiStream：解析 JSON delta、累计文本、记录结束原因与用量
+  → OpenAiEventDecoder：解析 JSON delta、累计文本和工具参数
+  → OpenAiStream：按订阅需求量派发结构化事件
   → onTextDelta 回调 / ChatResponse 完整结果
 ```
 
@@ -59,13 +62,13 @@ data: [DONE]
 ## 错误、超时与取消
 
 - HTTP 非 2xx 返回 `ModelHttpException`，与普通调用一致；成功响应必须声明 `text/event-stream`。
-- 非法 JSON、错误字段、工具调用、拒绝响应等不支持的能力返回 `ModelProtocolException`。角色块、空 delta 与 null content 在流式协议中合法。
+- 非法 JSON、错误字段、拒绝响应、旧版 function_call 等不支持的能力返回 `ModelProtocolException`。角色块、空 delta 与 null content 在流式协议中合法。
 - EOF 前没有收到 `[DONE]` 判定为不完整流；即使已输出部分文本或已收到结束原因，也不伪造成功结果。
 - 构造模型时的 `timeout` 用于流式调用总时限，包括服务端发完响应头后停止发送正文的情形。超时抛出 `HttpTimeoutException` 并取消 HTTP 交换。
 - 中断调用 `stream` 的线程会传播 `InterruptedException` 并取消订阅；应用可以使用线程中断停止本次生成。
 - 回调抛出的运行时异常或 Error 会原样传播到调用线程，并取消后续读取。
 
-回调在 HTTP 读取线程上串行执行，应快速返回，不能等待 `stream()` 返回或在其中关闭同一个模型。超时或取消不能强制终止一个已经开始执行的用户回调；回调自行管理其阻塞和副作用。已经显示的增量不会因后续失败而撤回，只有方法成功返回才表示本次响应完整。
+回调在触发派发的线程上串行执行，可能是 HTTP、request 调用或超时线程，应快速返回，不能等待 `stream()` 返回或在其中关闭同一个模型。超时或取消不能强制终止一个已经开始执行的用户回调；回调自行管理其阻塞和副作用。已经显示的增量不会因后续失败而撤回，只有方法成功返回才表示本次响应完整。
 
 JDK Flow 取消是尽力而为，可能还有在途通知。实现显式结束应用层结果，并忽略结束后的通知，不依赖取消后一定收到 `onComplete` 或 `onError`。当前不自动重连，因为重发生成请求可能重复文本或产生额外调用。
 
@@ -77,7 +80,7 @@ JDK Flow 取消是尽力而为，可能还有在途通知。实现显式结束�
 mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
 ```
 
-从 [ChatModel](../src/main/java/io/github/hi/neason/half/model/ChatModel.java) 的接口开始，依次阅读 [OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java) 的 HTTP 调用、[SseParser](../src/main/java/io/github/hi/neason/half/model/openai/SseParser.java) 的分帧和 [OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java) 的状态转换。
+从 [ChatModel](../src/main/java/io/github/hi/neason/half/model/ChatModel.java) 的接口开始，依次阅读 [OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java) 的 HTTP 调用、[SseParser](../src/main/java/io/github/hi/neason/half/model/openai/SseParser.java) 的分帧和 [OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java) 的订阅状态转换，以及 [OpenAiEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiEventDecoder.java) 的协议状态转换。
 
 测试使用本地 HTTP 服务，以握手信号证明首个增量在服务端发送后续事件前就已交付；另覆盖分片、UTF-8、多行 data、结束顺序、断流、超时和中断。运行 `mvn test` 无需模型密钥。
 

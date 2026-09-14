@@ -1,6 +1,6 @@
 # HALF 架构草案
 
-状态：整体架构仍为草案。当前已有 `ChatModel`、文本消息与请求/响应类型，以及 `OpenAiChatModel` 完整响应和 SSE 流式适配器；下述工具执行器、Agent 循环和运行结果尚未实现。第一阶段实现说明见 [LLM 接口协议](llm-api.md) 和 [流式接口](streaming.md)。
+状态：整体架构仍为草案。当前已有 `ChatModel`、文本和工具调用内容块、请求/响应类型及可订阅的模型事件流，以及 `OpenAiChatModel` 完整响应和 SSE 流式适配器；下述工具执行器、Agent 循环和运行结果尚未实现。第一阶段实现说明见 [LLM 接口协议](llm-api.md) 和 [流式接口](streaming.md)。
 
 ## 学习目标与依赖边界
 
@@ -49,7 +49,7 @@ JDK 标准库优先；JSON 编解码、HTTP 传输等基础能力可以按需使
 ## 后续设计事项
 
 - 基础工程已选 Java 21、Maven；包名前缀为 `io.github.hi.neason.half`，尚未发布到制品仓库。
-- 在首个 Chat Completions 适配器上继续学习其他协议，以及工具参数的表示与校验方式。
+- 在首个 Chat Completions 适配器上继续学习其他协议，以及工具参数 Schema 校验和执行策略。
 - 流式模型调用已有总时限与线程中断取消；Agent 运行级事件及取消语义仍待设计。
 - 上下文裁剪、会话持久化、重试、执行权限与沙箱边界。
 
