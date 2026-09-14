@@ -18,7 +18,7 @@ final class OpenAiStream implements Flow.Subscriber<String>, Flow.Subscription {
     private final Consumer<OpenAiStream> starter;
     private final Consumer<OpenAiStream> release;
     private final SseParser frames = new SseParser();
-    private final OpenAiEventDecoder decoder;
+    private final EventDecoder decoder;
     private final Object lock = new Object();
     private final AtomicInteger draining = new AtomicInteger();
     private final ArrayDeque<ModelEvent> pending = new ArrayDeque<>();
@@ -32,7 +32,17 @@ final class OpenAiStream implements Flow.Subscriber<String>, Flow.Subscription {
 
     OpenAiStream(ObjectMapper json, Flow.Subscriber<? super ModelEvent> downstream,
                  Consumer<OpenAiStream> starter, Consumer<OpenAiStream> release) {
-        this.decoder = new OpenAiEventDecoder(json);
+        this(new OpenAiEventDecoder(json)::accept, downstream, starter, release);
+    }
+
+    @FunctionalInterface
+    interface EventDecoder {
+        List<ModelEvent> accept(String data) throws ModelProtocolException;
+    }
+
+    OpenAiStream(EventDecoder decoder, Flow.Subscriber<? super ModelEvent> downstream,
+                 Consumer<OpenAiStream> starter, Consumer<OpenAiStream> release) {
+        this.decoder = decoder;
         this.downstream = downstream;
         this.starter = starter;
         this.release = release;
@@ -131,7 +141,7 @@ final class OpenAiStream implements Flow.Subscriber<String>, Flow.Subscription {
 
     @Override
     public void onComplete() {
-        transportError(new ModelProtocolException("Model stream closed before [DONE]"));
+        transportError(new ModelProtocolException("Model stream closed before its terminal event"));
     }
 
     void transportError(Throwable error) {

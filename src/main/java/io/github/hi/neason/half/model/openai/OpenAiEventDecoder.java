@@ -32,7 +32,7 @@ final class OpenAiEventDecoder {
             for (PendingTool tool : tools.values()) content.add(tool.completed());
             return List.of(new ModelEvent.Completed(new ChatResponse(content, finishReason, usage)));
         }
-        JsonNode root = OpenAiChatModel.decodeObject(json, data);
+        JsonNode root = OpenAiJson.decodeObject(json, data);
         JsonNode choices = root.path("choices");
         if (!choices.isArray()) throw invalid("Expected streaming choices array");
         if (choices.isEmpty()) {
@@ -73,7 +73,7 @@ final class OpenAiEventDecoder {
             }
             for (var entry : tools.entrySet()) {
                 ContentBlock.ToolCall complete = entry.getValue().completed();
-                OpenAiChatModel.requireArguments(json, complete.arguments());
+                OpenAiJson.requireArguments(json, complete.arguments());
                 events.add(new ModelEvent.ToolCallCompleted(entry.getKey(), complete));
             }
         }

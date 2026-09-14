@@ -17,9 +17,9 @@ HALF 是一个计划使用 Java 开发的轻量级 harness agent 框架，负责
 
 ## 当前状态
 
-第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions 文本与工具调用适配器，支持完整响应与 SSE 流式调用。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
+第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions、Responses 两种文本与工具调用适配器，支持完整响应与 SSE 流式调用。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
 
-当前支持结构化内容块、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具执行器、其他协议的适配器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
+当前支持结构化内容块、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具执行器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
 
 ## 构建与运行
 
@@ -32,7 +32,8 @@ mvn package
 
 手动调用真实服务前，配置以下环境变量（密钥从本机环境安全注入）：
 
-- `HALF_MODEL_ENDPOINT`：完整接口地址，例如 `https://api.openai.com/v1/chat/completions`。
+- `HALF_MODEL_API`：`chat-completions`（默认）或 `responses`。
+- `HALF_MODEL_ENDPOINT`：完整接口地址，例如 `https://api.openai.com/v1/chat/completions`；Responses 使用 `https://api.openai.com/v1/responses`。
 - `HALF_MODEL`：该服务实际支持的模型 ID。
 - `HALF_API_KEY`：该服务的 API 密钥。
 
@@ -70,3 +71,5 @@ mvn compile exec:java -Dexec.args="--events 用一句话解释背压"
 - [流式接口：SSE 分帧与文本增量](docs/streaming.md)
 
 - [结构化事件、订阅需求量与工具内容块](docs/model-events.md)
+
+- [Responses 协议与事件映射](docs/responses.md)

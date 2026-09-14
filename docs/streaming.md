@@ -1,5 +1,7 @@
 # 流式接口：SSE 分帧与文本增量
 
+本文的 JSON 字段和 `[DONE]` 规则针对 Chat Completions；Responses 的事件与终止规则见 [Responses 协议](responses.md)。两者共用以下订阅与文本回调入口。
+
 ## 文本便捷接口
 
 上层需要订阅、控制需求量或接收工具事件时，使用 `Flow.Publisher<ModelEvent> stream(request)`，详见 [结构化事件接口](model-events.md)。下面的文本回调方法保留用于简单调用，内部订阅同一事件流。
@@ -80,7 +82,7 @@ JDK Flow 取消是尽力而为，可能还有在途通知。实现显式结束�
 mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
 ```
 
-从 [ChatModel](../src/main/java/io/github/hi/neason/half/model/ChatModel.java) 的接口开始，依次阅读 [OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java) 的 HTTP 调用、[SseParser](../src/main/java/io/github/hi/neason/half/model/openai/SseParser.java) 的分帧和 [OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java) 的订阅状态转换，以及 [OpenAiEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiEventDecoder.java) 的协议状态转换。
+从 [ChatModel](../src/main/java/io/github/hi/neason/half/model/ChatModel.java) 的接口开始，依次阅读 [OpenAiHttpModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiHttpModel.java) 的 HTTP 调用、[SseParser](../src/main/java/io/github/hi/neason/half/model/openai/SseParser.java) 的分帧和 [OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java) 的订阅状态转换，以及 [OpenAiEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiEventDecoder.java) 的协议状态转换。
 
 测试使用本地 HTTP 服务，以握手信号证明首个增量在服务端发送后续事件前就已交付；另覆盖分片、UTF-8、多行 data、结束顺序、断流、超时和中断。运行 `mvn test` 无需模型密钥。
 

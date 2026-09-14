@@ -36,11 +36,11 @@ publisher.subscribe(new Flow.Subscriber<ModelEvent>() {
 | `ToolCallDelta` | 某个 index 对应的参数 JSON 字符串片段 |
 | `ToolCallCompleted` | 参数已拼接并通过 JSON 对象语法校验的工具调用 |
 | `Usage` | 服务端报告的本次用量 |
-| `Completed` | 收到 `[DONE]` 后的完整 `ChatResponse` |
+| `Completed` | 收到协议终止事件后的 `ChatResponse`，文本可能因 token 上限而截断 |
 
 所有事件都是不可变值，没有随着后续分片改变的共享 partial 对象。错误走 `Subscriber.onError`，不会再作为另一种成功事件发送。`Completed` 是占用需求量的数据事件；它交付后再发送不占需求量的 `onComplete`。
 
-`OpenAiChatModel` 原有的 `stream(request, onTextDelta)` 会订阅这个事件流并请求全部事件，将 `TextDelta` 转交回调，最终返回 `Completed` 中的响应。非流式 `chat()` 仍单独调用 `stream: false`，便于对照两种协议。
+两个适配器共用的 `stream(request, onTextDelta)` 会订阅这个事件流并请求全部事件，将 `TextDelta` 转交回调，最终返回 `Completed` 中的响应。非流式 `chat()` 仍单独调用 `stream: false`，便于对照普通与流式调用。
 
 ## 需求量与取消的实际边界
 
@@ -115,7 +115,7 @@ messages.add(ChatMessage.toolResult("call_a", "晴，25°C"));
 var next = new ChatRequest(messages, null, request.tools());
 ```
 
-`assistantResponse` 保留工具调用，工具结果编码为 `role: tool`、对应的 `tool_call_id` 和文本 `content`。有多个调用时，宿主需要为各调用添加结果。
+`assistantResponse` 保留工具调用，Chat Completions 将工具结果编码为 `role: tool`、对应的 `tool_call_id` 和文本 `content`；Responses 使用 `function_call_output`、`call_id` 和 `output`。有多个调用时，宿主需要为各调用添加结果。
 
 这里实现的是声明、解析、分片聚合与回填协议，没有自动执行工具、完整参数 Schema 校验、权限策略或 Agent 循环。模型建议的工具名、参数和值仍由宿主校验；结构合法不代表可以执行。
 
@@ -124,7 +124,9 @@ var next = new ChatRequest(messages, null, request.tools());
 - 数据定义：[ModelEvent](../src/main/java/io/github/hi/neason/half/model/ModelEvent.java)、[ContentBlock](../src/main/java/io/github/hi/neason/half/model/ContentBlock.java)、[ToolDefinition](../src/main/java/io/github/hi/neason/half/model/ToolDefinition.java)。
 - 需求量与生命周期：[OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java)。
 - 分片与聚合：[OpenAiEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiEventDecoder.java)。
-- HTTP 与请求映射：[OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java)。
+- Responses 分片与聚合：[OpenAiResponsesEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiResponsesEventDecoder.java)，详见 [Responses 协议](responses.md)。
+- HTTP：[OpenAiHttpModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiHttpModel.java)。
+- Chat Completions 请求映射：[OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java)。
 
 运行 `mvn test` 验证本地协议。配置模型环境变量后，`mvn compile exec:java -Dexec.args="--events 解释背压"` 展示逐事件消费；该命令会调用配置的服务。
 
