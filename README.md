@@ -17,9 +17,9 @@ HALF 是一个计划使用 Java 开发的轻量级 harness agent 框架，负责
 
 ## 当前状态
 
-第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions 非流式纯文本适配器。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
+第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions 纯文本适配器，支持完整响应与 SSE 流式调用。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
 
-当前支持有序文本消息、可选 token 上限、结束原因、用量解析和明确的错误分类。工具调用、流式输出、其他协议的适配器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
+当前支持有序文本消息、可选 token 上限、文本增量回调、完整响应汇总、结束原因、用量解析和明确的错误分类。流式调用有总时限并支持调用线程中断。工具调用、其他协议的适配器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
 
 ## 构建与运行
 
@@ -38,6 +38,9 @@ mvn package
 
 ```bash
 mvn compile exec:java -Dexec.args="用一句话解释 LLM 的消息历史"
+
+# 边接收边输出文本，结束后打印结束原因与用量
+mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
 ```
 
 该示例会实际调用配置的模型服务。仅用本地测试时无需设置上述变量。
@@ -61,3 +64,4 @@ mvn compile exec:java -Dexec.args="用一句话解释 LLM 的消息历史"
 - [开发约定](AGENTS.md)
 - [架构草案](docs/architecture.md)
 - [第一步：LLM 接口协议与模型抽象](docs/llm-api.md)
+- [流式接口：SSE 分帧与文本增量](docs/streaming.md)
