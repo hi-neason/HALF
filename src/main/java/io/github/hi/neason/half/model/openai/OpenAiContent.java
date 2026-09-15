@@ -34,6 +34,7 @@ final class OpenAiContent {
                     var tool = item.withArray("tool_calls").addObject().put("id", call.id()).put("type", "function");
                     tool.putObject("function").put("name", call.name()).put("arguments", call.arguments());
                 } else if (block instanceof ContentBlock.Refusal value) refusal.append(value.text());
+                else if (block instanceof ContentBlock.Thinking || block instanceof ContentBlock.RedactedThinking) throw new IllegalArgumentException("Anthropic thinking blocks require Messages API");
                 else if (block instanceof ContentBlock.Reasoning) throw new IllegalArgumentException("Reasoning item replay requires Responses");
             }
             if (!refusal.isEmpty()) item.put("refusal", refusal.toString());

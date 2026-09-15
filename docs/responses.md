@@ -68,7 +68,7 @@ Responses 不等待 `[DONE]`；读取到合法的终止事件后停止 HTTP 读�
 
 ## 共用部分与边界
 
-[OpenAiHttpModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiHttpModel.java) 共用 HTTP、总时限、关闭与文本回调；[OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java) 共用 SSE 分帧、冷订阅、`request(n)` 和取消。每个订阅有独立的协议解码器，只有首次正需求量才发请求。
+[HttpChatModel](../src/main/java/io/github/hi/neason/half/model/http/HttpChatModel.java) 共用 HTTP、总时限、关闭与文本回调；[ModelStream](../src/main/java/io/github/hi/neason/half/model/http/ModelStream.java) 共用 SSE 分帧、冷订阅、`request(n)` 和取消。每个订阅有独立的协议解码器，只有首次正需求量才发请求。
 
 单 SSE 帧最多 1 Mi 字符，累计可见文本、工具参数和身份字段最多 4 Mi 字符；最多 128 个输出项、每条消息 128 个文本块、64 个工具调用。上层背压限制交付和继续读取，不保证远端模型暂停生成。
 

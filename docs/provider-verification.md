@@ -27,3 +27,27 @@ Responses 服务在 `response.reasoning_summary_part.added` 中可能省略空 `
 最初一次 Chat Completions 请求的 512 个输出 token 全部用于推理，最终 `finish_reason=length` 且无正文。该请求不算文本流验证成功；改用简短提示与 2048 token 上限后收到非空正文，且拼接结果与最终响应一致。调用方应同时检查结束原因与内容，不能仅凭 HTTP 200 判断任务完成。
 
 本次未实测图片、文件、拒绝输出，以及查询、删除、取消、压缩等资源端点，也未验证官方 OpenAI 服务。自动化测试继续使用本地模拟服务，不依赖此厂商、外网或密钥。
+
+## 火山方舟 Coding：Messages
+
+验证日期：2026-09-15。
+
+- Base URL：`https://ark.cn-beijing.volces.com/api/coding`
+- 实际端点：`https://ark.cn-beijing.volces.com/api/coding/v1/messages`
+- 请求模型：`ark-code-latest`；通过 `AnthropicMessagesModel` 调用，使用 `x-api-key` 和 `anthropic-version: 2023-06-01`。
+- 密钥通过临时进程标准输入传入；未写入工程。输出预算为 2048 token。
+
+| 验证项 | 结果 |
+| --- | --- |
+| 普通文本响应 | 通过，正文为 `HALF联调成功`，结束原因为 `end_turn` |
+| SSE 事件订阅，每处理一条再 `request(1)` | 通过，6 个 `TextDelta`，拼接与最终正文一致 |
+| Thinking 与签名聚合 | 通过，17 个 `ThinkingDelta` 和 1 个 `ThinkingCompleted` |
+| 流式工具调用与 JSON 参数聚合 | 通过，`get_test_weather` 参数为 `{"city":"北京"}`，结束原因为 `tool_use` |
+| 工具结果及推理历史回填 | 通过，下一轮返回 `北京的天气为晴（测试数据）。`，结束原因为 `end_turn` |
+| JSON Schema 输出约束 | 未通过：返回了说明文字和 Markdown 代码块，整个正文不是合法 JSON |
+
+当次首个正文片段约 2.8 秒到达，只代表单次观测。工具结果使用合成数据，没有实际查询天气。
+
+结构化输出请求使用官方 Messages 字段 `output_config.format`，Schema 要求对象包含布尔属性 `ok`。虽然 HTTP 请求成功，正文却带有说明和代码围栏，严格 JSON 解析失败。因此不能将此服务的 Messages 结构化输出记为已验证支持，也不通过剥离 Markdown 掩盖格式不符合的问题。此前 Chat Completions / Responses 的结构化输出通过，不代表 Messages 路由也支持相同能力。
+
+本次没有验证图片输入、显式 thinking 预算或 adaptive 配置、隐藏推理块及其他高级端点；也没有调用官方 Anthropic 服务。

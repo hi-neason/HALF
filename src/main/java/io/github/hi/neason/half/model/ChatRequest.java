@@ -3,7 +3,7 @@ package io.github.hi.neason.half.model;
 import java.util.List;
 import java.util.Objects;
 
-/** maxOutputTokens 为 null 时不发送限制，采用服务端默认值。 */
+/** maxOutputTokens 为 null 时由适配器决定默认值；Anthropic Messages 使用 1024，OpenAI 不发送限制。 */
 public record ChatRequest(List<ChatMessage> messages, Integer maxOutputTokens, List<ToolDefinition> tools, ModelOptions options) {
     public ChatRequest {
         Objects.requireNonNull(options, "options");

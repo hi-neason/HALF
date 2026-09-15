@@ -1,6 +1,6 @@
 # HALF 架构草案
 
-状态：整体架构仍为草案。当前已有 `ChatModel`、文本和工具调用内容块、请求/响应类型及可订阅的模型事件流，以及 `OpenAiChatModel`、`OpenAiResponsesModel` 两种完整响应和 SSE 流式适配器；下述工具执行器、Agent 循环和运行结果尚未实现。第一阶段实现说明见 [LLM 接口协议](llm-api.md) 和 [流式接口](streaming.md)。
+状态：整体架构仍为草案。当前已有 `ChatModel`、文本和工具调用内容块、请求/响应类型及可订阅的模型事件流，以及 `OpenAiChatModel`、`OpenAiResponsesModel`、`AnthropicMessagesModel` 三种完整响应和 SSE 流式适配器；下述工具执行器、Agent 循环和运行结果尚未实现。第一阶段实现说明见 [LLM 接口协议](llm-api.md) 和 [流式接口](streaming.md)。
 
 官方 HTTP/SSE 的模型映射入口与完整 JSON 入口并存，具体端点和能力边界见 [官方协议覆盖](official-api.md)。
 
@@ -56,3 +56,7 @@ JDK 标准库优先；JSON 编解码、HTTP 传输等基础能力可以按需使
 - 上下文裁剪、会话持久化、重试、执行权限与沙箱边界。
 
 这些事项在对应实现开始前确定；当前不宣称具备持久化或安全隔离能力。
+
+## 模型传输与协议边界
+
+`model/http` 负责原生 HTTP、SSE 分帧和 `Flow` 订阅生命周期。OpenAI 与 Anthropic 各自实现认证配置、请求映射及事件解码，共享需求量、取消和超时处理。Anthropic 的内容块与事件差异见 [Messages 协议](anthropic-messages.md)。

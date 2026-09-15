@@ -1,5 +1,7 @@
 # 官方协议覆盖与调用入口
 
+Anthropic 的独立协议实现见 [Messages 协议](anthropic-messages.md)。
+
 本文只讨论 OpenAI Chat Completions 和 Responses 的 HTTP/SSE 接口，不涉及工具执行或 Agent 行为。当前提供两种入口：
 
 - `OpenAiChatModel` / `OpenAiResponsesModel`：将已支持的请求选项、内容和事件映射成 HALF 的 Java 类型。

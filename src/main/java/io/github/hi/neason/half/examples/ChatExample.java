@@ -7,6 +7,7 @@ import io.github.hi.neason.half.model.ChatResponse;
 import io.github.hi.neason.half.model.ModelEvent;
 import io.github.hi.neason.half.model.openai.OpenAiChatModel;
 import io.github.hi.neason.half.model.openai.OpenAiResponsesModel;
+import io.github.hi.neason.half.model.anthropic.AnthropicMessagesModel;
 
 import java.net.URI;
 import java.time.Duration;
@@ -36,7 +37,12 @@ public final class ChatExample {
                     run(provider, args);
                 }
             }
-            default -> throw new IllegalArgumentException("HALF_MODEL_API must be chat-completions or responses");
+            case "anthropic-messages" -> {
+                try (var provider = new AnthropicMessagesModel(endpoint, key, model, Duration.ofSeconds(60))) {
+                    run(provider, args);
+                }
+            }
+            default -> throw new IllegalArgumentException("HALF_MODEL_API must be chat-completions, responses or anthropic-messages");
         }
     }
 
@@ -89,6 +95,8 @@ public final class ChatExample {
                     case ModelEvent.RefusalDelta refusal -> System.out.print(refusal.text());
                     case ModelEvent.ReasoningDelta reasoning -> System.out.println("\nreasoning_delta=" + reasoning.text());
                     case ModelEvent.ReasoningCompleted reasoning -> System.out.println("\nreasoning_completed=" + reasoning.reasoning().id());
+                    case ModelEvent.ThinkingDelta thinking -> System.out.println("\nthinking_delta=" + thinking.text());
+                    case ModelEvent.ThinkingCompleted thinking -> System.out.println("\nthinking_completed=" + thinking.index());
                     case ModelEvent.Usage usage -> System.out.println("\nusage=" + usage.usage());
                 }
                 // 本事件处理完毕，再请求下一条；工具参数增量也占用一个需求量。

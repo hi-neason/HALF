@@ -8,6 +8,20 @@ public sealed interface ModelEvent {
         public TextDelta { Objects.requireNonNull(text, "text"); }
     }
 
+    record ThinkingDelta(int index, String text) implements ModelEvent {
+        public ThinkingDelta {
+            if (index < 0) throw new IllegalArgumentException("index must not be negative");
+            Objects.requireNonNull(text, "text");
+        }
+    }
+
+    record ThinkingCompleted(int index, ContentBlock.Thinking thinking) implements ModelEvent {
+        public ThinkingCompleted {
+            if (index < 0) throw new IllegalArgumentException("index must not be negative");
+            Objects.requireNonNull(thinking, "thinking");
+        }
+    }
+
     record RefusalDelta(String text) implements ModelEvent {
         public RefusalDelta { Objects.requireNonNull(text, "text"); }
     }

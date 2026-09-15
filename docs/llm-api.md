@@ -81,11 +81,11 @@ Accept: application/json
 
 1. [ChatMessage](../src/main/java/io/github/hi/neason/half/model/ChatMessage.java)、[ChatRequest](../src/main/java/io/github/hi/neason/half/model/ChatRequest.java)：消息顺序、输入校验与不可变列表。
 2. [ChatModel](../src/main/java/io/github/hi/neason/half/model/ChatModel.java)：模型的最小接口，不关心 HTTP 或 JSON。
-3. [OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java)：`encodeRequest` → [OpenAiHttpModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiHttpModel.java) 的 `HttpClient.send` → `decodeResponse`。
+3. [OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java)：`encodeRequest` → [HttpChatModel](../src/main/java/io/github/hi/neason/half/model/http/HttpChatModel.java) 的 `HttpClient.sendAsync` → `decodeResponse`。
 4. [ChatResponse](../src/main/java/io/github/hi/neason/half/model/ChatResponse.java)、[TokenUsage](../src/main/java/io/github/hi/neason/half/model/TokenUsage.java)：把协议字段映射回 Java 对象。
 5. [ChatExample](../src/main/java/io/github/hi/neason/half/examples/ChatExample.java)：配置供应商，随后通过 `ChatModel` 调用。
 
-两个适配器通过共用的 `OpenAiHttpModel` 管理各自可复用的 `HttpClient`，使用完毕后关闭；示例通过 try-with-resources 完成释放。端点必须是完整 HTTP(S) URL，不包含 URL 用户凭据、查询参数或 fragment。远程服务使用 HTTPS，本地测试使用 HTTP。
+三个适配器通过共用的 `HttpChatModel` 管理各自可复用的 `HttpClient`，使用完毕后关闭；示例通过 try-with-resources 完成释放。端点必须是完整 HTTP(S) URL，不包含 URL 用户凭据、查询参数或 fragment。远程服务使用 HTTPS，本地测试使用 HTTP。
 
 ## 错误与验证
 

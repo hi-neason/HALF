@@ -27,10 +27,10 @@ public final class OpenAiChatModel extends OpenAiHttpModel {
     }
 
     @Override
-    OpenAiStream.EventDecoder newEventDecoder() { return new OpenAiEventDecoder(json)::accept; }
+    protected OpenAiStream.EventDecoder newEventDecoder() { return new OpenAiEventDecoder(json)::accept; }
 
     @Override
-    String encodeRequest(ChatRequest request, boolean streaming) throws IOException {
+    protected String encodeRequest(ChatRequest request, boolean streaming) throws IOException {
         ObjectNode root = json.createObjectNode();
         root.put("model", model);
         root.put("stream", streaming);
@@ -67,7 +67,7 @@ public final class OpenAiChatModel extends OpenAiHttpModel {
     }
 
     @Override
-    ChatResponse decodeResponse(String body) throws ModelProtocolException {
+    protected ChatResponse decodeResponse(String body) throws ModelProtocolException {
         JsonNode root = OpenAiJson.decodeObject(json, body);
         JsonNode choices = root.path("choices");
         if (!choices.isArray() || choices.size() != 1) {

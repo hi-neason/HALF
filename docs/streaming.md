@@ -26,7 +26,7 @@ HTTP 字节片段
   → JDK UTF-8 解码与分行
   → SseParser：空行结束一个事件，多行 data 合并
   → OpenAiEventDecoder：解析 JSON delta、累计文本和工具参数
-  → OpenAiStream：按订阅需求量派发结构化事件
+  → ModelStream：按订阅需求量派发结构化事件
   → onTextDelta 回调 / ChatResponse 完整结果
 ```
 
@@ -82,7 +82,7 @@ JDK Flow 取消是尽力而为，可能还有在途通知。实现显式结束�
 mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
 ```
 
-从 [ChatModel](../src/main/java/io/github/hi/neason/half/model/ChatModel.java) 的接口开始，依次阅读 [OpenAiHttpModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiHttpModel.java) 的 HTTP 调用、[SseParser](../src/main/java/io/github/hi/neason/half/model/openai/SseParser.java) 的分帧和 [OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java) 的订阅状态转换，以及 [OpenAiEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiEventDecoder.java) 的协议状态转换。
+从 [ChatModel](../src/main/java/io/github/hi/neason/half/model/ChatModel.java) 的接口开始，依次阅读 [HttpChatModel](../src/main/java/io/github/hi/neason/half/model/http/HttpChatModel.java) 的 HTTP 调用、[SseParser](../src/main/java/io/github/hi/neason/half/model/http/SseParser.java) 的分帧和 [ModelStream](../src/main/java/io/github/hi/neason/half/model/http/ModelStream.java) 的订阅状态转换，以及 [OpenAiEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiEventDecoder.java) 的协议状态转换。
 
 测试使用本地 HTTP 服务，以握手信号证明首个增量在服务端发送后续事件前就已交付；另覆盖分片、UTF-8、多行 data、结束顺序、断流、超时和中断。运行 `mvn test` 无需模型密钥。
 

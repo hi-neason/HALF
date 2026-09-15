@@ -14,7 +14,7 @@ public record ChatMessage(Role role, List<ContentBlock> content, String toolCall
         outputItemsJson = List.copyOf(outputItemsJson);
         if (role != Role.ASSISTANT && !outputItemsJson.isEmpty()) throw new IllegalArgumentException("Only assistant messages can replay output items");
         for (ContentBlock block : content) {
-            if ((block instanceof ContentBlock.ToolCall || block instanceof ContentBlock.Refusal || block instanceof ContentBlock.Reasoning)
+            if ((block instanceof ContentBlock.ToolCall || block instanceof ContentBlock.Refusal || block instanceof ContentBlock.Reasoning || block instanceof ContentBlock.Thinking || block instanceof ContentBlock.RedactedThinking)
                     && role != Role.ASSISTANT) throw new IllegalArgumentException("Only assistant messages can contain model output blocks");
             if ((block instanceof ContentBlock.Image || block instanceof ContentBlock.File) && role != Role.USER) {
                 throw new IllegalArgumentException("Images and files require a user message");

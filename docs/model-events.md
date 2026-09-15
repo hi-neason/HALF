@@ -125,10 +125,10 @@ var next = new ChatRequest(messages, null, request.tools());
 ## 阅读与验证
 
 - 数据定义：[ModelEvent](../src/main/java/io/github/hi/neason/half/model/ModelEvent.java)、[ContentBlock](../src/main/java/io/github/hi/neason/half/model/ContentBlock.java)、[ToolDefinition](../src/main/java/io/github/hi/neason/half/model/ToolDefinition.java)。
-- 需求量与生命周期：[OpenAiStream](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiStream.java)。
+- 需求量与生命周期：[ModelStream](../src/main/java/io/github/hi/neason/half/model/http/ModelStream.java)。
 - 分片与聚合：[OpenAiEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiEventDecoder.java)。
 - Responses 分片与聚合：[OpenAiResponsesEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiResponsesEventDecoder.java)，详见 [Responses 协议](responses.md)。
-- HTTP：[OpenAiHttpModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiHttpModel.java)。
+- HTTP：[HttpChatModel](../src/main/java/io/github/hi/neason/half/model/http/HttpChatModel.java)。
 - Chat Completions 请求映射：[OpenAiChatModel](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiChatModel.java)。
 
 运行 `mvn test` 验证本地协议。配置模型环境变量后，`mvn compile exec:java -Dexec.args="--events 解释背压"` 展示逐事件消费；该命令会调用配置的服务。
@@ -136,3 +136,7 @@ var next = new ChatRequest(messages, null, request.tools());
 协议资料：[OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)、[JDK 21 Flow.Subscription](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Flow.Subscription.html)。核对日期：2026-09-14。
 
 图片/文件输入、推理回传、拒绝响应和官方 JSON/SSE 入口详见 [官方协议覆盖](official-api.md)。
+
+## Anthropic 推理事件
+
+Messages 的 `thinking_delta` 映射为 `ThinkingDelta(index, text)`；签名聚合后通过 `ThinkingCompleted` 和最终 `ContentBlock.Thinking` 保留。`RedactedThinking` 只作为不透明内容块保留和回传，不产生可见文本。协议差异见 [Anthropic Messages](anthropic-messages.md)。

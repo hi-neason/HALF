@@ -47,6 +47,18 @@ public sealed interface ContentBlock {
         }
     }
 
+    /** Anthropic thinking output; signature is opaque and must be replayed unchanged. */
+    record Thinking(String thinking, String signature) implements ContentBlock {
+        public Thinking {
+            Objects.requireNonNull(thinking, "thinking");
+            Objects.requireNonNull(signature, "signature");
+        }
+    }
+
+    record RedactedThinking(String data) implements ContentBlock {
+        public RedactedThinking { Objects.requireNonNull(data, "data"); }
+    }
+
     record ToolCall(String id, String name, String arguments) implements ContentBlock {
         public ToolCall {
             if (id == null || id.isBlank() || name == null || name.isBlank()) {
