@@ -11,6 +11,7 @@
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <exec.mainClass>io.github.hi.neason.half.examples.ChatExample</exec.mainClass>
     </properties>
     <dependencies>
         <!-- JSON 编解码；模型协议由 HALF 自行实现。 -->
@@ -46,7 +47,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.6.3</version>
                 <configuration>
-                    <mainClass>io.github.hi.neason.half.examples.ChatExample</mainClass>
+                    <mainClass>${exec.mainClass}</mainClass>
                 </configuration>
             </plugin>
         </plugins>
