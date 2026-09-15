@@ -142,7 +142,6 @@ class OpenAiChatModelTest {
                 completion("{\"role\":\"assistant\",\"content\":\"body-secret\"}", "\"function_call\""),
                 completion("{\"role\":\"assistant\",\"content\":\"body-secret\",\"tool_calls\":[{}]}", "\"stop\""),
                 completion("{\"role\":\"assistant\",\"content\":\"body-secret\",\"function_call\":{}}", "\"stop\""),
-                completion("{\"role\":\"assistant\",\"content\":\"body-secret\",\"refusal\":\"refused\"}", "\"stop\""),
                 "{\"choices\":[" + choice + "],\"usage\":{}}",
                 withUsage("-1", "2", "1"), withUsage("1.5", "2", "3"),
                 withUsage("\"1\"", "2", "3"), withUsage("1", "-1", "0"),

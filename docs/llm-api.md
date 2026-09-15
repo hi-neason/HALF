@@ -73,7 +73,7 @@ Accept: application/json
 - `content_filter`：受内容过滤影响，不能视作普通完成。
 - 其他结束原因保留原值，调用方不要只判断“有没有文本”。
 
-协议允许 `content: null`。当前实现将文本映射为 `ContentBlock.Text`，将 `tool_calls` 映射为 `ContentBlock.ToolCall`；只有工具调用时文本可为 null。`ChatResponse.text()` 仍可提取拼接文本，`toolCalls()` 获取工具调用列表。拒绝响应和已弃用的 `function_call` 仍明确报错。流式 `delta.content` 缺省或 null 表示该事件没有新增文本。工具协议与结果回填见 [模型事件与工具内容块](model-events.md)。
+协议允许 `content: null`。当前实现将文本映射为 `ContentBlock.Text`，将 `tool_calls` 映射为 `ContentBlock.ToolCall`；只有工具调用或拒绝内容时文本可为 null。`ChatResponse.text()` 仍可提取拼接文本，`toolCalls()` 获取工具调用列表。拒绝响应映射为 `ContentBlock.Refusal`，通过 `refusal()` 读取；已弃用的 `function_call` 仍明确报错。流式 `delta.content` 缺省或 null 表示该事件没有新增文本。工具协议与结果回填见 [模型事件与工具内容块](model-events.md)。
 
 适配器只接受一个 choice，不静默丢弃多个候选。允许额外的响应字段和空字符串文本；对缺失的必要字段、不合法的 JSON、错误类型或负数用量明确报错。
 

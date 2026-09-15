@@ -35,6 +35,9 @@ publisher.subscribe(new Flow.Subscriber<ModelEvent>() {
 | `ToolCallStarted` | 工具调用的 index、id 和 name |
 | `ToolCallDelta` | 某个 index 对应的参数 JSON 字符串片段 |
 | `ToolCallCompleted` | 参数已拼接并通过 JSON 对象语法校验的工具调用 |
+| `RefusalDelta` | 拒绝文本增量，独立于普通文本 |
+| `ReasoningDelta` | 推理摘要或正文增量 |
+| `ReasoningCompleted` | 包含加密内容的推理完成项 |
 | `Usage` | 服务端报告的本次用量 |
 | `Completed` | 收到协议终止事件后的 `ChatResponse`，文本可能因 token 上限而截断 |
 
@@ -131,3 +134,5 @@ var next = new ChatRequest(messages, null, request.tools());
 运行 `mvn test` 验证本地协议。配置模型环境变量后，`mvn compile exec:java -Dexec.args="--events 解释背压"` 展示逐事件消费；该命令会调用配置的服务。
 
 协议资料：[OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)、[JDK 21 Flow.Subscription](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Flow.Subscription.html)。核对日期：2026-09-14。
+
+图片/文件输入、推理回传、拒绝响应和官方 JSON/SSE 入口详见 [官方协议覆盖](official-api.md)。

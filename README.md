@@ -19,7 +19,9 @@ HALF 是一个计划使用 Java 开发的轻量级 harness agent 框架，负责
 
 第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions、Responses 两种文本与工具调用适配器，支持完整响应与 SSE 流式调用。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
 
-当前支持结构化内容块、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具执行器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
+当前支持文本/图片/文件输入、拒绝和推理内容、结构化输出配置、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具执行器及 Agent 循环尚未实现。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
+
+另外提供官方 JSON/SSE 客户端及 Responses、Chat Completions 的资源查询、删除等配套端点，完整覆盖清单和限制见 [官方协议覆盖](docs/official-api.md)。
 
 ## 构建与运行
 
@@ -73,3 +75,5 @@ mvn compile exec:java -Dexec.args="--events 用一句话解释背压"
 - [结构化事件、订阅需求量与工具内容块](docs/model-events.md)
 
 - [Responses 协议与事件映射](docs/responses.md)
+
+- [官方协议覆盖、资源端点与请求选项](docs/official-api.md)

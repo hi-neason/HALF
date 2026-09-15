@@ -36,7 +36,7 @@ mvn compile exec:java -Dexec.args="--events 解释模型事件"
 | 工具调用内容块 | `output[]` 的 function_call 项 |
 | 用量 | `input_tokens`、`output_tokens`、`total_tokens` |
 
-工具声明显式使用 `strict: false`，保留现有 Schema 的可选字段语义。框架只校验参数为 JSON 对象，不替代完整 Schema 校验。
+工具声明默认使用 `strict: false`，保留现有 Schema 的可选字段语义；可通过 `ToolDefinition.strict` 显式覆盖。框架只校验参数为 JSON 对象，不替代完整 Schema 校验。
 
 每次调用发送 `store: false`，由宿主传入历史，不维护服务端会话。`ChatMessage.assistantResponse(response)` 与 `ChatMessage.toolResult(callId, result)` 可直接用于下一轮请求。
 
@@ -50,6 +50,9 @@ Responses 的输出项 ID（如 `fc_...`）与工具调用关联 ID（如 `call_
 | --- | --- |
 | `response.output_item.added`，项类型为 function_call | `new ModelEvent.ToolCallStarted(...)` |
 | `response.output_text.delta` | `new ModelEvent.TextDelta(...)` |
+| `response.refusal.delta` | `new ModelEvent.RefusalDelta(...)` |
+| 推理摘要/正文 delta | `new ModelEvent.ReasoningDelta(...)` |
+| 推理项 `response.output_item.done` | `new ModelEvent.ReasoningCompleted(...)` |
 | `response.function_call_arguments.delta` | `new ModelEvent.ToolCallDelta(...)` |
 | `response.function_call_arguments.done` | 核对完整参数与累计分片，不重复追加 |
 | `response.output_item.done`，项类型为 function_call | 校验身份、参数和状态，创建 `ToolCallCompleted` |
@@ -69,7 +72,7 @@ Responses 不等待 `[DONE]`；读取到合法的终止事件后停止 HTTP 读�
 
 单 SSE 帧最多 1 Mi 字符，累计可见文本、工具参数和身份字段最多 4 Mi 字符；最多 128 个输出项、每条消息 128 个文本块、64 个工具调用。上层背压限制交付和继续读取，不保证远端模型暂停生成。
 
-当前不支持图像/音频输入输出、内置托管工具、拒绝内容、后台任务、`previous_response_id` 和 Conversations API。遇到未支持的输出项或流事件明确报错。推理项及其 summary/text 事件不映射为可见文本，引用注解也不保留；加密推理内容的多轮回传尚未实现，因此本适配器不提供推理状态的无损往返。
+模型入口已支持图片/文件输入、拒绝和推理内容；推理 ID、摘要、正文与加密内容可通过 `assistantResponse` 回传，仍不混入 `text()`。引用注解、音频、内置工具等未映射的结构使用保留 JSON 的官方 API client；资源端点、后台响应查询及请求选项见 [官方协议覆盖](official-api.md)。当前模型抽象不保留所有官方扩展字段，不承诺整个响应的无损往返。
 
 测试使用本地 HTTP 服务与协议状态机，不需要真实密钥；没有宣称已完成真实厂商联调。
 

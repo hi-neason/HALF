@@ -35,29 +35,7 @@ public final class OpenAiResponsesModel extends OpenAiHttpModel {
         var root = json.createObjectNode();
         root.put("model", model).put("stream", streaming).put("store", false);
         if (request.maxOutputTokens() != null) root.put("max_output_tokens", request.maxOutputTokens());
-        var input = root.putArray("input");
-        var callIds = new HashSet<String>();
-        for (ChatMessage message : request.messages()) {
-            if (message.role() == ChatMessage.Role.TOOL) {
-                input.addObject().put("type", "function_call_output")
-                        .put("call_id", message.toolCallId()).put("output", message.text());
-                continue;
-            }
-            // 按内容块顺序写入消息与独立的 function_call 项。
-            for (ContentBlock block : message.content()) {
-                switch (block) {
-                    case ContentBlock.Text text -> input.addObject()
-                            .put("role", message.role().name().toLowerCase(Locale.ROOT))
-                            .put("content", text.text());
-                    case ContentBlock.ToolCall call -> {
-                        if (!callIds.add(call.id())) throw new IllegalArgumentException("Duplicate tool call id");
-                        OpenAiJson.requireArguments(json, call.arguments());
-                        input.addObject().put("type", "function_call").put("call_id", call.id())
-                                .put("name", call.name()).put("arguments", call.arguments());
-                    }
-                }
-            }
-        }
+        OpenAiContent.responses(json, root.putArray("input"), request.messages());
         if (!request.tools().isEmpty()) {
             var tools = root.putArray("tools");
             for (ToolDefinition definition : request.tools()) {
@@ -69,9 +47,10 @@ public final class OpenAiResponsesModel extends OpenAiHttpModel {
                 }
                 // 保留宿主 Schema 的可选字段语义，不自动转成 strict Schema。
                 tools.addObject().put("type", "function").put("name", definition.name())
-                        .put("description", definition.description()).put("strict", false).set("parameters", schema);
+                        .put("description", definition.description()).put("strict", Boolean.TRUE.equals(definition.strict())).set("parameters", schema);
             }
         }
+        OpenAiRequestOptions.apply(json, root, request, true);
         return json.writeValueAsString(root);
     }
 
@@ -101,7 +80,14 @@ public final class OpenAiResponsesModel extends OpenAiHttpModel {
                     if (!status.equals("completed")) throw invalid("Incomplete tool calls cannot be delivered");
                     if (!callIds.add(call.id()) || callIds.size() > 64) throw invalid("Invalid tool call identities or count");
                     characters += (long) call.id().length() + call.name().length() + call.arguments().length();
-                } else characters += ((ContentBlock.Text) block).text().length();
+                } else if (block instanceof ContentBlock.Text text) characters += text.text().length();
+                else if (block instanceof ContentBlock.Refusal refusal) characters += refusal.text().length();
+                else if (block instanceof ContentBlock.Reasoning reasoning) {
+                    characters += reasoning.id().length();
+                    for (String fragment : reasoning.summary()) characters += fragment.length();
+                    for (String fragment : reasoning.content()) characters += fragment.length();
+                    if (reasoning.encryptedContent() != null) characters += reasoning.encryptedContent().length();
+                }
                 if (characters > 4 * 1024 * 1024) throw invalid("Model output exceeds the 4 Mi character limit");
                 content.add(block);
             }
@@ -112,7 +98,9 @@ public final class OpenAiResponsesModel extends OpenAiHttpModel {
             JsonNode counts = root.get("usage");
             usage = Optional.of(new TokenUsage(count(counts, "input_tokens"), count(counts, "output_tokens"), count(counts, "total_tokens")));
         }
-        return new ChatResponse(content, finish, usage);
+        List<String> snapshots = new ArrayList<>();
+        for (JsonNode item : output) snapshots.add(item.toString());
+        return new ChatResponse(content, finish, usage, snapshots);
     }
 
     static List<ContentBlock> decodeItem(ObjectMapper json, JsonNode item) throws ModelProtocolException {
@@ -126,8 +114,11 @@ public final class OpenAiResponsesModel extends OpenAiHttpModel {
                 if (!parts.isArray() || parts.size() > 128) throw invalid("Invalid output message content");
                 List<ContentBlock> blocks = new ArrayList<>();
                 for (JsonNode part : parts) {
-                    if (!"output_text".equals(text(part, "type"))) throw invalid("Only output_text content is supported");
-                    blocks.add(new ContentBlock.Text(text(part, "text")));
+                    switch (text(part, "type")) {
+                        case "output_text" -> blocks.add(new ContentBlock.Text(text(part, "text")));
+                        case "refusal" -> blocks.add(new ContentBlock.Refusal(text(part, "refusal")));
+                        default -> throw invalid("Unsupported output message content");
+                    }
                 }
                 return blocks;
             }
@@ -137,10 +128,23 @@ public final class OpenAiResponsesModel extends OpenAiHttpModel {
                 OpenAiJson.requireArguments(json, arguments);
                 return List.of(new ContentBlock.ToolCall(identity(item, "call_id"), identity(item, "name"), arguments));
             }
-            // 当前抽象只表达可见文本和函数调用；推理项不转换为用户文本或可执行内容。
-            case "reasoning": return List.of();
+            case "reasoning": return List.of(new ContentBlock.Reasoning(identity(item, "id"),
+                    reasoningParts(item, "summary", "summary_text"), reasoningParts(item, "content", "reasoning_text"),
+                    item.hasNonNull("encrypted_content") ? text(item, "encrypted_content") : null));
             default: throw invalid("Unsupported Responses output item type");
         }
+    }
+
+    private static List<String> reasoningParts(JsonNode item, String field, String type) throws ModelProtocolException {
+        if (!item.hasNonNull(field)) return List.of();
+        JsonNode parts = item.get(field);
+        if (!parts.isArray() || parts.size() > 128) throw invalid("Invalid reasoning parts");
+        List<String> result = new ArrayList<>();
+        for (JsonNode part : parts) {
+            if (!type.equals(text(part, "type"))) throw invalid("Invalid reasoning part type");
+            result.add(text(part, "text"));
+        }
+        return List.copyOf(result);
     }
 
     static String text(JsonNode node, String field) throws ModelProtocolException {

@@ -17,6 +17,7 @@ import java.util.TreeMap;
 final class OpenAiEventDecoder {
     private final ObjectMapper json;
     private final StringBuilder text = new StringBuilder();
+    private final StringBuilder refusal = new StringBuilder();
     private final TreeMap<Integer, PendingTool> tools = new TreeMap<>();
     private String finishReason;
     private Optional<TokenUsage> usage = Optional.empty();
@@ -29,6 +30,7 @@ final class OpenAiEventDecoder {
             if (finishReason == null) throw invalid("Stream ended without a finish reason");
             List<ContentBlock> content = new ArrayList<>();
             if (!text.isEmpty()) content.add(new ContentBlock.Text(text.toString()));
+            if (!refusal.isEmpty()) content.add(new ContentBlock.Refusal(refusal.toString()));
             for (PendingTool tool : tools.values()) content.add(tool.completed());
             return List.of(new ModelEvent.Completed(new ChatResponse(content, finishReason, usage)));
         }
@@ -60,6 +62,11 @@ final class OpenAiEventDecoder {
             count(fragment);
             text.append(fragment);
             events.add(new ModelEvent.TextDelta(fragment));
+        }
+        String refused = optionalText(delta, "refusal");
+        if (refused != null && !refused.isEmpty()) {
+            count(refused); refusal.append(refused);
+            events.add(new ModelEvent.RefusalDelta(refused));
         }
         JsonNode calls = delta.get("tool_calls");
         if (calls != null && !calls.isNull()) {

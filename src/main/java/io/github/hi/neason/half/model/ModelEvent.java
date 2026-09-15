@@ -8,6 +8,24 @@ public sealed interface ModelEvent {
         public TextDelta { Objects.requireNonNull(text, "text"); }
     }
 
+    record RefusalDelta(String text) implements ModelEvent {
+        public RefusalDelta { Objects.requireNonNull(text, "text"); }
+    }
+
+    record ReasoningDelta(int outputIndex, int partIndex, boolean summary, String text) implements ModelEvent {
+        public ReasoningDelta {
+            if (outputIndex < 0 || partIndex < 0) throw new IllegalArgumentException("Indices must be nonnegative");
+            Objects.requireNonNull(text, "text");
+        }
+    }
+
+    record ReasoningCompleted(int outputIndex, ContentBlock.Reasoning reasoning) implements ModelEvent {
+        public ReasoningCompleted {
+            if (outputIndex < 0) throw new IllegalArgumentException("Index must be nonnegative");
+            Objects.requireNonNull(reasoning, "reasoning");
+        }
+    }
+
     /** 元数据通常只在此调用的第一个分片出现。 */
     record ToolCallStarted(int index, String id, String name) implements ModelEvent {
         public ToolCallStarted {

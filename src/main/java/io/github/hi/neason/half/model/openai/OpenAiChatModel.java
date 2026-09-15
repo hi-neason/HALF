@@ -37,27 +37,7 @@ public final class OpenAiChatModel extends OpenAiHttpModel {
         if (streaming) {
             root.putObject("stream_options").put("include_usage", true);
         }
-        var messages = root.putArray("messages");
-        for (ChatMessage message : request.messages()) {
-            ObjectNode item = messages.addObject();
-            item.put("role", message.role().name().toLowerCase(Locale.ROOT));
-            List<ContentBlock.ToolCall> calls = message.content().stream()
-                    .filter(ContentBlock.ToolCall.class::isInstance).map(ContentBlock.ToolCall.class::cast).toList();
-            if (calls.isEmpty() || !message.text().isEmpty()) item.put("content", message.text());
-            else item.putNull("content");
-            if (message.role() == ChatMessage.Role.TOOL) item.put("tool_call_id", message.toolCallId());
-            if (!calls.isEmpty()) {
-                var encoded = item.putArray("tool_calls");
-                var ids = new HashSet<String>();
-                for (ContentBlock.ToolCall call : calls) {
-                    if (!ids.add(call.id())) throw new IllegalArgumentException("Duplicate tool call id");
-                    OpenAiJson.requireArguments(json, call.arguments());
-                    var tool = encoded.addObject();
-                    tool.put("id", call.id()).put("type", "function");
-                    tool.putObject("function").put("name", call.name()).put("arguments", call.arguments());
-                }
-            }
-        }
+        OpenAiContent.chat(json, root.putArray("messages"), request.messages());
         if (request.maxOutputTokens() != null) {
             root.put("max_completion_tokens", request.maxOutputTokens());
         }
@@ -79,8 +59,10 @@ public final class OpenAiChatModel extends OpenAiHttpModel {
                 var function = encodedTools.addObject().put("type", "function").putObject("function");
                 function.put("name", definition.name()).put("description", definition.description());
                 function.set("parameters", schema);
+                if (definition.strict() != null) function.put("strict", definition.strict());
             }
         }
+        OpenAiRequestOptions.apply(json, root, request, false);
         return json.writeValueAsString(root);
     }
 
@@ -112,6 +94,7 @@ public final class OpenAiChatModel extends OpenAiHttpModel {
                 content.add(new ContentBlock.ToolCall(id, name, arguments));
             }
         }
+        if (message.hasNonNull("refusal")) content.add(new ContentBlock.Refusal(requiredText(message, "refusal")));
         JsonNode text = message.get("content");
         if (text != null && text.isTextual()) content.add(0, new ContentBlock.Text(text.textValue()));
         else if (content.isEmpty() || text != null && !text.isNull()) {
@@ -123,8 +106,8 @@ public final class OpenAiChatModel extends OpenAiHttpModel {
     }
 
     static void rejectUnsupported(JsonNode message) throws ModelProtocolException {
-        if (message.hasNonNull("function_call") || message.hasNonNull("refusal")) {
-            throw new ModelProtocolException("Legacy function_call and refusal responses are not supported");
+        if (message.hasNonNull("function_call")) {
+            throw new ModelProtocolException("Legacy function_call responses are not supported");
         }
     }
 

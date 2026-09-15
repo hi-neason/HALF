@@ -60,6 +60,7 @@ public final class ChatExample {
         } else {
             response = model.chat(request);
             System.out.println(response.text());
+            if (!response.refusal().isEmpty()) System.out.println("refusal=" + response.refusal());
         }
         System.out.println("finish_reason=" + response.finishReason());
         response.usage().ifPresent(usage -> System.out.println("usage=" + usage));
@@ -85,6 +86,9 @@ public final class ChatExample {
                     case ModelEvent.ToolCallStarted started -> System.out.println("\ntool_started=" + started);
                     case ModelEvent.ToolCallDelta delta -> System.out.println("\ntool_arguments_delta=" + delta);
                     case ModelEvent.ToolCallCompleted completed -> System.out.println("\ntool_completed=" + completed.call());
+                    case ModelEvent.RefusalDelta refusal -> System.out.print(refusal.text());
+                    case ModelEvent.ReasoningDelta reasoning -> System.out.println("\nreasoning_delta=" + reasoning.text());
+                    case ModelEvent.ReasoningCompleted reasoning -> System.out.println("\nreasoning_completed=" + reasoning.reasoning().id());
                     case ModelEvent.Usage usage -> System.out.println("\nusage=" + usage.usage());
                 }
                 // 本事件处理完毕，再请求下一条；工具参数增量也占用一个需求量。

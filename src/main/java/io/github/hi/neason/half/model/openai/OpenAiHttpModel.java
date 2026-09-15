@@ -41,6 +41,7 @@ abstract class OpenAiHttpModel implements ChatModel, AutoCloseable {
     private final HttpClient http;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<OpenAiStream> active = ConcurrentHashMap.newKeySet();
+    private final Set<CompletableFuture<?>> calls = ConcurrentHashMap.newKeySet();
     private final ScheduledThreadPoolExecutor deadlines = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "half-stream-deadline");
         thread.setDaemon(true);
@@ -85,8 +86,23 @@ abstract class OpenAiHttpModel implements ChatModel, AutoCloseable {
         HttpRequest httpRequest = httpRequest(request, false);
 
         // 2. 网络传输使用 JDK；每次 chat 只发送一次请求，不自动重试。
-        HttpResponse<String> response = http.send(httpRequest,
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        // JDK 的请求 timeout 不保证覆盖响应正文读取；对完整响应另设总时限。
+        var exchange = http.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        calls.add(exchange);
+        HttpResponse<String> response;
+        try {
+            if (closed.get()) throw new IOException("Model is closed");
+            response = exchange.get(TimeUnit.NANOSECONDS.convert(timeout), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException error) {
+            throw new HttpTimeoutException("Model request exceeded its time limit");
+        } catch (ExecutionException error) {
+            Throwable cause = error.getCause();
+            if (cause instanceof IOException io) throw io;
+            throw new IOException("Model request failed", cause);
+        } finally {
+            calls.remove(exchange);
+            exchange.cancel(true);
+        }
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new ModelHttpException(response.statusCode());
         }
@@ -201,6 +217,7 @@ abstract class OpenAiHttpModel implements ChatModel, AutoCloseable {
     public void close() {
         if (closed.compareAndSet(false, true)) {
             for (OpenAiStream stream : List.copyOf(active)) stream.fail(new IOException("Model is closed"));
+            for (CompletableFuture<?> call : List.copyOf(calls)) call.cancel(true);
             deadlines.shutdownNow();
             http.close();
         }

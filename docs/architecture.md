@@ -2,6 +2,8 @@
 
 状态：整体架构仍为草案。当前已有 `ChatModel`、文本和工具调用内容块、请求/响应类型及可订阅的模型事件流，以及 `OpenAiChatModel`、`OpenAiResponsesModel` 两种完整响应和 SSE 流式适配器；下述工具执行器、Agent 循环和运行结果尚未实现。第一阶段实现说明见 [LLM 接口协议](llm-api.md) 和 [流式接口](streaming.md)。
 
+官方 HTTP/SSE 的模型映射入口与完整 JSON 入口并存，具体端点和能力边界见 [官方协议覆盖](official-api.md)。
+
 ## 学习目标与依赖边界
 
 架构服务于理解 Agent 生态的技术原理。AI 应用层逻辑使用原生 Java 实现，保持消息流转、状态变化和执行决策可以直接阅读与验证。

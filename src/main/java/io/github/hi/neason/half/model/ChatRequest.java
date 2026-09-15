@@ -1,10 +1,12 @@
 package io.github.hi.neason.half.model;
 
 import java.util.List;
+import java.util.Objects;
 
 /** maxOutputTokens 为 null 时不发送限制，采用服务端默认值。 */
-public record ChatRequest(List<ChatMessage> messages, Integer maxOutputTokens, List<ToolDefinition> tools) {
+public record ChatRequest(List<ChatMessage> messages, Integer maxOutputTokens, List<ToolDefinition> tools, ModelOptions options) {
     public ChatRequest {
+        Objects.requireNonNull(options, "options");
         messages = List.copyOf(messages);
         tools = List.copyOf(tools);
         if (tools.stream().map(ToolDefinition::name).distinct().count() != tools.size()) {
@@ -16,6 +18,10 @@ public record ChatRequest(List<ChatMessage> messages, Integer maxOutputTokens, L
         if (maxOutputTokens != null && maxOutputTokens <= 0) {
             throw new IllegalArgumentException("maxOutputTokens must be positive");
         }
+    }
+
+    public ChatRequest(List<ChatMessage> messages, Integer maxOutputTokens, List<ToolDefinition> tools) {
+        this(messages, maxOutputTokens, tools, ModelOptions.defaults());
     }
 
     public ChatRequest(List<ChatMessage> messages) {

@@ -64,7 +64,7 @@ data: [DONE]
 ## 错误、超时与取消
 
 - HTTP 非 2xx 返回 `ModelHttpException`，与普通调用一致；成功响应必须声明 `text/event-stream`。
-- 非法 JSON、错误字段、拒绝响应、旧版 function_call 等不支持的能力返回 `ModelProtocolException`。角色块、空 delta 与 null content 在流式协议中合法。
+- 非法 JSON、错误字段、旧版 function_call 等不支持的能力返回 `ModelProtocolException`。角色块、空 delta 与 null content 在流式协议中合法。
 - EOF 前没有收到 `[DONE]` 判定为不完整流；即使已输出部分文本或已收到结束原因，也不伪造成功结果。
 - 构造模型时的 `timeout` 用于流式调用总时限，包括服务端发完响应头后停止发送正文的情形。超时抛出 `HttpTimeoutException` 并取消 HTTP 交换。
 - 中断调用 `stream` 的线程会传播 `InterruptedException` 并取消订阅；应用可以使用线程中断停止本次生成。

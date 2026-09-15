@@ -53,7 +53,7 @@ class OpenAiResponsesModelTest {
             assertEquals("assistant", body.at("/input/2/role").asText());
             assertEquals("function_call", body.at("/input/3/type").asText());
             assertEquals("call_1", body.at("/input/3/call_id").asText());
-            assertFalse(body.at("/input/3").has("id"));
+            assertEquals("fc", body.at("/input/3/id").asText());
             assertEquals("function_call_output", body.at("/input/4/type").asText());
             assertEquals("call_1", body.at("/input/4/call_id").asText());
             assertEquals("晴", body.at("/input/4/output").asText());
@@ -186,13 +186,13 @@ class OpenAiResponsesModelTest {
         }
     }
 
-    @Test void ignoresReasoningWithoutLeakingItIntoVisibleText() throws Exception {
+    @Test void preservesReasoningWithoutLeakingItIntoVisibleText() throws Exception {
         ObjectNode reasoning = JSON.createObjectNode().put("type", "reasoning").put("id", "r");
         reasoning.putArray("summary");
         try (var model = model()) { assertEquals("hi", model.decodeResponse(response(reasoning, message("m", "hi")).toString()).text()); }
         var decoder = new OpenAiResponsesEventDecoder(JSON);
         assertTrue(decoder.accept(added(0, reasoning).toString()).isEmpty());
-        assertTrue(decoder.accept(done(0, reasoning).toString()).isEmpty());
+        assertInstanceOf(ModelEvent.ReasoningCompleted.class, decoder.accept(done(0, reasoning).toString()).getFirst());
         assertInstanceOf(ModelEvent.Completed.class, decoder.accept(terminal(response(reasoning)).toString()).getLast());
     }
 
