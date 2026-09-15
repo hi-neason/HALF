@@ -60,3 +60,9 @@ JDK 标准库优先；JSON 编解码、HTTP 传输等基础能力可以按需使
 ## 模型传输与协议边界
 
 `model/http` 负责原生 HTTP、SSE 分帧和 `Flow` 订阅生命周期。OpenAI 与 Anthropic 各自实现认证配置、请求映射及事件解码，共享需求量、取消和超时处理。Anthropic 的内容块与事件差异见 [Messages 协议](anthropic-messages.md)。
+
+模型入口与原始 API client 的同步调用共用 `HttpCalls`：跟踪进行中的请求、限制完整响应读取时间、关闭时取消请求，并统一检查 HTTP 状态。JSON 解码及 `HttpClient` 的关闭策略由各入口负责。
+
+两种流式入口共用 `SseParser` 的字段解析。`ModelStream` 接收 JDK 拆分后的行并交付模型事件；原始 API 流通过 `SseFrameReader` 有界读取字符并交付原始 SSE 事件。订阅调度和协议终止判定各自保留：模型入口必须得到完整模型结果，原始 Responses 流则保留失败终态供调用方判断。
+
+通用消息以 `ReplayState` 标明快照所属协议，快照字符串由对应适配器解释。切换协议时调用方可显式移除回放状态；内容块本身仍须满足目标协议约束，详见 [模型内容与回放](official-api.md#模型内容与事件)。

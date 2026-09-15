@@ -3,8 +3,16 @@ package io.github.hi.neason.half.examples;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
-import io.github.hi.neason.half.model.*;
+import io.github.hi.neason.half.model.ChatMessage;
+import io.github.hi.neason.half.model.ChatModel;
+import io.github.hi.neason.half.model.ChatRequest;
+import io.github.hi.neason.half.model.ChatResponse;
+import io.github.hi.neason.half.model.ModelHttpException;
+import io.github.hi.neason.half.model.ModelOptions;
+import io.github.hi.neason.half.model.ModelProtocolException;
+import io.github.hi.neason.half.model.ResponseFormat;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,15 +44,27 @@ public final class StructuredOutputExample {
         var names = List.of("prompt_only", "schema_only", "prompt_and_schema");
         var results = new ArrayList<Result>();
         for (int i = 0; i < requests.size(); i++) {
+            ChatResponse response;
             try {
-                var response = model.chat(requests.get(i));
-                results.add(new Result(names.get(i), validate(response), response.finishReason()));
-            } catch (java.io.IOException | RuntimeException error) {
-                // 不输出异常正文，避免把服务端响应或认证信息写进测试报告。
-                results.add(new Result(names.get(i), "REQUEST_ERROR:" + error.getClass().getSimpleName(), ""));
+                response = model.chat(requests.get(i));
+            } catch (IOException error) {
+                // 只记录失败类别和 HTTP 状态，不输出异常正文或认证信息。
+                results.add(new Result(names.get(i), requestFailure(error), ""));
+                continue;
             }
+            results.add(new Result(names.get(i), validate(response), response.finishReason()));
         }
         return List.copyOf(results);
+    }
+
+    private static String requestFailure(IOException error) {
+        if (error instanceof ModelHttpException http) {
+            return "HTTP_ERROR:" + http.statusCode();
+        }
+        if (error instanceof ModelProtocolException) {
+            return "PROTOCOL_ERROR";
+        }
+        return "TRANSPORT_ERROR:" + error.getClass().getSimpleName();
     }
 
     /** 只校验本用例的固定 Schema，不宣称实现通用 JSON Schema 校验器。 */

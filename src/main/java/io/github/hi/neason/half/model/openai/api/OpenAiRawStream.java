@@ -1,6 +1,7 @@
 package io.github.hi.neason.half.model.openai.api;
 
 import io.github.hi.neason.half.model.ModelHttpException;
+import io.github.hi.neason.half.model.http.SseFrameReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -95,11 +96,12 @@ final class OpenAiRawStream implements Flow.Subscription, Runnable {
             Reader reader = new InputStreamReader(body, StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                     .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT));
-            var parser = new FrameReader(reader);
+            var parser = new SseFrameReader(reader, MAX_FRAME_CHARS);
             boolean terminal = false;
             while (awaitDemand()) {
-                OpenAiSseEvent event = parser.next();
-                if (event == null) throw new IOException("SSE ended before terminal event");
+                var frame = parser.next();
+                if (frame == null) throw new IOException("SSE ended before terminal event");
+                var event = new OpenAiSseEvent(frame.event(), frame.data());
                 if (event.data().equals("[DONE]")) {
                     if (responses) throw new IOException("Unexpected Responses terminal marker");
                     terminal = true;
@@ -137,45 +139,4 @@ final class OpenAiRawStream implements Flow.Subscription, Runnable {
         }
     }
 
-    /** 按字符限制整帧大小，避免 readLine 在恶意长行上先分配无界字符串。 */
-    private static final class FrameReader {
-        private final Reader reader;
-        private boolean first = true;
-        private boolean afterCr;
-        FrameReader(Reader reader) { this.reader = reader; }
-
-        OpenAiSseEvent next() throws IOException {
-            StringBuilder data = new StringBuilder();
-            StringBuilder line = new StringBuilder();
-            String event = "message";
-            boolean hasData = false;
-            int count = 0;
-            for (;;) {
-                int value = reader.read();
-                if (value < 0) return null;
-                if (first) { first = false; if (value == '\uFEFF') continue; }
-                if (afterCr) { afterCr = false; if (value == '\n') continue; }
-                if (++count > MAX_FRAME_CHARS) throw new IOException("SSE frame exceeds character limit");
-                if (value != '\n' && value != '\r') { line.append((char) value); continue; }
-                afterCr = value == '\r';
-                if (line.isEmpty()) {
-                    if (hasData) return new OpenAiSseEvent(event, data.toString());
-                    event = "message";
-                    count = 0;
-                    continue;
-                }
-                int colon = line.indexOf(":");
-                String field = colon < 0 ? line.toString() : line.substring(0, colon);
-                String fieldValue = colon < 0 ? "" : line.substring(colon + 1);
-                if (fieldValue.startsWith(" ")) fieldValue = fieldValue.substring(1);
-                if (field.equals("event")) event = fieldValue.isEmpty() ? "message" : fieldValue;
-                if (field.equals("data")) {
-                    if (hasData) data.append('\n');
-                    data.append(fieldValue);
-                    hasData = true;
-                }
-                line.setLength(0);
-            }
-        }
-    }
 }

@@ -362,7 +362,8 @@ class AnthropicMessagesModelTest {
         };
         respond(200, "text/event-stream", body);
         try (var model = model()) {
-            Exception failure = assertThrows(Exception.class, () -> model.stream(request(), s -> {}));
+            ModelProtocolException failure = assertThrows(ModelProtocolException.class, () -> model.stream(request(), s -> {}));
+            assertProtocolFailureWithoutCompletion(model.stream(request()));
             assertFalse(failure.toString().contains("test-secret"));
         }
     }
@@ -375,9 +376,12 @@ class AnthropicMessagesModelTest {
         }
     }
 
-    @Test void rejectsWrongStreamingContentType() {
+    @Test void rejectsWrongStreamingContentType() throws Exception {
         json(SUCCESS);
-        try (var model = model()) { assertThrows(Exception.class, () -> model.stream(request(), s -> {})); }
+        try (var model = model()) {
+            assertThrows(ModelProtocolException.class, () -> model.stream(request(), s -> {}));
+            assertProtocolFailureWithoutCompletion(model.stream(request()));
+        }
     }
 
     @ParameterizedTest @ValueSource(strings = {"{}", "{\"type\":\"error\"}", "[]", "not json"})
@@ -399,6 +403,34 @@ class AnthropicMessagesModelTest {
         try (var model = new AnthropicMessagesModel(endpoint, "test-secret", "test-model", Duration.ofMillis(150))) {
             assertThrows(HttpTimeoutException.class, () -> model.chat(request()));
         } finally { release.countDown(); }
+    }
+
+    private static void assertProtocolFailureWithoutCompletion(Flow.Publisher<ModelEvent> publisher) throws Exception {
+        var terminal = new CompletableFuture<Throwable>();
+        var completionEvents = new AtomicInteger();
+        var terminalSignals = new AtomicInteger();
+        var successfulCompletions = new AtomicInteger();
+        publisher.subscribe(new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+            }
+            @Override public void onNext(ModelEvent event) {
+                if (event instanceof ModelEvent.Completed) completionEvents.incrementAndGet();
+            }
+            @Override public void onError(Throwable failure) {
+                terminalSignals.incrementAndGet();
+                terminal.complete(failure);
+            }
+            @Override public void onComplete() {
+                terminalSignals.incrementAndGet();
+                successfulCompletions.incrementAndGet();
+                terminal.complete(null);
+            }
+        });
+        assertInstanceOf(ModelProtocolException.class, terminal.get(4, TimeUnit.SECONDS));
+        assertEquals(1, terminalSignals.get());
+        assertEquals(0, completionEvents.get());
+        assertEquals(0, successfulCompletions.get());
     }
 
     static List<ModelEvent> collect(Flow.Publisher<ModelEvent> publisher) throws Exception {

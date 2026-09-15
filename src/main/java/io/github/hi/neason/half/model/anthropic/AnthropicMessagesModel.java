@@ -10,6 +10,7 @@ import io.github.hi.neason.half.model.ModelOptions;
 import io.github.hi.neason.half.model.ModelProtocolException;
 import io.github.hi.neason.half.model.ResponseFormat;
 import io.github.hi.neason.half.model.ToolChoice;
+import io.github.hi.neason.half.model.ReplayState;
 import io.github.hi.neason.half.model.http.HttpChatModel;
 import io.github.hi.neason.half.model.http.ModelStream;
 import java.io.IOException;
@@ -64,7 +65,7 @@ public final class AnthropicMessagesModel extends HttpChatModel {
         boolean conversation = false;
         Set<String> ids = new HashSet<>();
         for (var message : history) {
-            if (!message.outputItemsJson().isEmpty()) {
+            if (message.replayState().protocol() != ReplayState.Protocol.NONE) {
                 throw new IllegalArgumentException("Responses output snapshots cannot be replayed as Messages");
             }
             if (message.role() == ChatMessage.Role.SYSTEM || message.role() == ChatMessage.Role.DEVELOPER) {

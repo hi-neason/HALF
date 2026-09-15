@@ -48,7 +48,51 @@ class StructuredOutputExampleTest {
         assertEquals(seen.get(0).messages(), seen.get(2).messages());
         assertEquals(seen.get(1).options(), seen.get(2).options());
         assertTrue(seen.stream().allMatch(request -> request.maxOutputTokens() == 2048));
-        assertEquals(List.of("PASS", "REQUEST_ERROR:IOException", "PASS"), results.stream().map(StructuredOutputExample.Result::status).toList());
+        assertEquals(List.of("PASS", "TRANSPORT_ERROR:IOException", "PASS"), results.stream().map(StructuredOutputExample.Result::status).toList());
         assertFalse(results.toString().contains("private response body"));
     }
+    @Test void distinguishesHttpStatusCodesWithoutRetryingRequests() throws Exception {
+        var codes = List.of(401, 429, 500);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var results = StructuredOutputExample.run(request -> {
+            throw new ModelHttpException(codes.get(calls.getAndIncrement()));
+        });
+        assertEquals(3, calls.get());
+        assertEquals(List.of("HTTP_ERROR:401", "HTTP_ERROR:429", "HTTP_ERROR:500"),
+                results.stream().map(StructuredOutputExample.Result::status).toList());
+        assertTrue(results.stream().allMatch(result -> result.finishReason().isEmpty()));
+    }
+
+    @Test void distinguishesProtocolFailureWithoutPublishingItsMessage() throws Exception {
+        var results = StructuredOutputExample.run(request -> {
+            throw new ModelProtocolException("private response credential");
+        });
+        assertEquals(List.of("PROTOCOL_ERROR", "PROTOCOL_ERROR", "PROTOCOL_ERROR"),
+                results.stream().map(StructuredOutputExample.Result::status).toList());
+        assertFalse(results.toString().contains("private response credential"));
+    }
+
+    @Test void unexpectedRuntimeFailuresPropagateAndStopTheComparison() {
+        for (RuntimeException failure : List.of(
+                new IllegalArgumentException("invalid configuration"),
+                new NullPointerException("unexpected state"))) {
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var thrown = assertThrows(failure.getClass(), () -> StructuredOutputExample.run(request -> {
+                calls.incrementAndGet();
+                throw failure;
+            }));
+            assertSame(failure, thrown);
+            assertEquals(1, calls.get());
+        }
+    }
+
+    @Test void responseValidationProgrammingErrorsDoNotBecomeRequestFailures() {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        assertThrows(NullPointerException.class, () -> StructuredOutputExample.run(request -> {
+            calls.incrementAndGet();
+            return null;
+        }));
+        assertEquals(1, calls.get());
+    }
+
 }

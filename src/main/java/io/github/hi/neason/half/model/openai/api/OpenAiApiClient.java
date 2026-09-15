@@ -4,24 +4,19 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.github.hi.neason.half.model.ModelHttpException;
+import io.github.hi.neason.half.model.http.HttpCalls;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Flow;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 
@@ -33,7 +28,7 @@ abstract class OpenAiApiClient implements AutoCloseable {
     final Duration timeout;
     final ScheduledThreadPoolExecutor timer;
     final Set<OpenAiRawStream> streams = ConcurrentHashMap.newKeySet();
-    private final Set<CompletableFuture<?>> calls = ConcurrentHashMap.newKeySet();
+    private final HttpCalls calls;
     private final String base;
     private final String key;
     volatile boolean closed;
@@ -53,6 +48,7 @@ abstract class OpenAiApiClient implements AutoCloseable {
         timeout.toNanos();
         base = baseUri.toASCIIString().replaceAll("/+$", "") + "/";
         http = HttpClient.newBuilder().connectTimeout(timeout).followRedirects(HttpClient.Redirect.NEVER).build();
+        calls = new HttpCalls(http, timeout);
         timer = new ScheduledThreadPoolExecutor(1, Thread.ofPlatform().daemon().name("half-api-timeout").factory());
         timer.setRemoveOnCancelPolicy(true);
     }
@@ -97,24 +93,7 @@ abstract class OpenAiApiClient implements AutoCloseable {
     final JsonNode call(String method, String path, Map<String, ?> query, ObjectNode body)
             throws IOException, InterruptedException {
         if (closed) throw new IllegalStateException("Client is closed");
-        var pending = http.sendAsync(request(method, path, query, body, false), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        calls.add(pending);
-        HttpResponse<String> response;
-        try {
-            if (closed) throw new IOException("Client is closed");
-            response = pending.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
-        } catch (TimeoutException error) {
-            throw new java.net.http.HttpTimeoutException("API request timed out");
-        } catch (ExecutionException error) {
-            if (error.getCause() instanceof IOException io) throw io;
-            throw new IOException("API request failed");
-        } catch (java.util.concurrent.CancellationException error) {
-            throw new IOException("API request cancelled");
-        } finally {
-            pending.cancel(true);
-            calls.remove(pending);
-        }
-        if (response.statusCode() < 200 || response.statusCode() >= 300) throw new ModelHttpException(response.statusCode());
+        var response = calls.send(request(method, path, query, body, false));
         if (response.statusCode() == 204 || response.statusCode() == 205) return NullNode.instance;
         try {
             JsonNode node = JSON.readTree(response.body());
@@ -146,7 +125,7 @@ abstract class OpenAiApiClient implements AutoCloseable {
     @Override public void close() {
         closed = true;
         streams.forEach(stream -> stream.fail(new IOException("Client is closed")));
-        calls.forEach(call -> call.cancel(true));
+        calls.close();
         timer.shutdownNow();
         http.shutdownNow();
     }

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hi.neason.half.model.ChatMessage;
 import io.github.hi.neason.half.model.ContentBlock;
 import io.github.hi.neason.half.model.ModelProtocolException;
+import io.github.hi.neason.half.model.ReplayState;
 
 import java.util.HashSet;
 import java.util.List;
@@ -17,6 +18,9 @@ final class OpenAiContent {
 
     static void chat(ObjectMapper json, ArrayNode messages, List<ChatMessage> history) throws ModelProtocolException {
         for (ChatMessage message : history) {
+            if (message.replayState().protocol() != ReplayState.Protocol.NONE) {
+                throw new IllegalArgumentException("Responses replay state cannot be encoded as Chat Completions; explicitly remove replay state first");
+            }
             var item = messages.addObject().put("role", message.role().name().toLowerCase(Locale.ROOT));
             if (message.role() == ChatMessage.Role.TOOL) item.put("tool_call_id", message.toolCallId());
             boolean media = message.content().stream().anyMatch(b -> b instanceof ContentBlock.Image || b instanceof ContentBlock.File);
@@ -44,10 +48,10 @@ final class OpenAiContent {
     static void responses(ObjectMapper json, ArrayNode input, List<ChatMessage> history) throws ModelProtocolException {
         var callIds = new HashSet<String>();
         for (ChatMessage message : history) {
-            if (!message.outputItemsJson().isEmpty()) {
+            if (message.replayState().protocol() == ReplayState.Protocol.OPENAI_RESPONSES) {
                 // 保留输出消息的 id/status 以及注解等字段，不将输出项重建为不完整的输入 union。
                 var decoded = new java.util.ArrayList<ContentBlock>();
-                for (String snapshot : message.outputItemsJson()) {
+                for (String snapshot : message.replayState().snapshots()) {
                     var value = OpenAiJson.decodeObject(json, snapshot);
                     decoded.addAll(ResponsesCodec.decodeItem(json, value));
                     if ("function_call".equals(value.path("type").asText()) && !callIds.add(value.path("call_id").asText())) {

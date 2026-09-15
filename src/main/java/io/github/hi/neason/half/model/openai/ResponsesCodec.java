@@ -6,6 +6,7 @@ import io.github.hi.neason.half.model.ChatResponse;
 import io.github.hi.neason.half.model.ContentBlock;
 import io.github.hi.neason.half.model.ModelProtocolException;
 import io.github.hi.neason.half.model.TokenUsage;
+import io.github.hi.neason.half.model.ReplayState;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -57,7 +58,7 @@ final class ResponsesCodec {
         }
         List<String> snapshots = new ArrayList<>();
         for (JsonNode item : output) snapshots.add(item.toString());
-        return new ChatResponse(content, finish, usage, snapshots);
+        return new ChatResponse(content, finish, usage, ReplayState.responses(snapshots));
     }
 
     static List<ContentBlock> decodeItem(ObjectMapper json, JsonNode item) throws ModelProtocolException {

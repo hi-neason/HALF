@@ -94,7 +94,7 @@ var options = ModelOptions.builder()
 var request = new ChatRequest(List.of(ChatMessage.user("解释 SSE")), 256, List.of(), options);
 ```
 
-旧构造器保持源码兼容；新增的 record 组件会改变序列化形状及相等性比较，不保证已编译调用方的二进制兼容。
+旧构造器签名保留；record 组件变化会影响序列化形状、反射及相等性比较，不保证已编译调用方的二进制兼容。`ChatMessage` / `ChatResponse` 的第四参现在支持 `ReplayState` 与旧 `List<String>` 两种重载，直接传字面量 `null` 会有重载歧义；无快照请用三参构造器或 `ReplayState.none()`。
 
 选项可组合但不同模型可能不接受相同组合；例如部分推理模型限制采样参数。旧构造器继续可用，未配置的参数省略。
 
@@ -120,7 +120,18 @@ var request = new ChatRequest(List.of(ChatMessage.user("解释 SSE")), 256, List
 - `ContentBlock.Reasoning`：Responses 的 ID、摘要文本、推理文本和不透明 `encrypted_content`；通过 `assistantResponse` 按顺序回传。
 - `ModelEvent.ReasoningDelta` / `ReasoningCompleted`：推理分片和完成项；`summary` 标志区分摘要与推理正文。加密内容不解密，不转换成普通文本。
 
-Responses 解码同时保留 `ChatResponse.outputItemsJson()` 原始输出项；`assistantResponse` 携带这些快照，回传时保留消息 ID、状态、注解等字段并核对内容一致性。纯文本可自行构造；拒绝项的 Responses 回传必须使用原始快照，不能仅凭拒绝文本重建完整的官方输出消息。
+Responses 解码通过 `ChatResponse.replayState()` 保留原始输出项，并标记 `ReplayState.Protocol.OPENAI_RESPONSES`；无快照统一表示为 `NONE`。核心只保存不可变字符串列表，对应适配器解析和校验。`outputItemsJson()` 保留为派生访问器，旧的快照列表构造器也继续可用。
+
+`assistantResponse` 携带回放状态，Responses 回传时保留消息 ID、状态、注解等字段并核对快照与内容块一致性。纯文本可自行构造；拒绝项的 Responses 回传必须使用原始快照，不能仅凭拒绝文本重建完整的官方输出消息。
+
+Chat Completions 和 Anthropic Messages 会拒绝携带 Responses 快照的消息。调用方决定放弃快照时，可在消息或响应上调用 `withoutReplayState()`；它返回新对象并保留所有内容块，不执行跨协议内容转换：
+
+```java
+ChatMessage replay = ChatMessage.assistantResponse(response);
+ChatMessage contentOnly = replay.withoutReplayState();
+```
+
+移除快照不代表内容必然能在目标协议中重用，例如 Responses 的推理内容块仍可能被目标适配器拒绝。
 
 模型层对图片和文件限定 USER 角色，推理和拒绝限定 ASSISTANT 角色。Chat Completions 不接受 Responses 推理项回传，会显式报错。对于音频、原始注解、内置工具输出、多个候选等尚未映射为 `ContentBlock` 的官方结构，应使用保留 JSON 的 API client。
 
