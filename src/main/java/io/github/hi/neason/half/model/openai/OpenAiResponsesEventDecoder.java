@@ -12,211 +12,329 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.TreeMap;
 
-import static io.github.hi.neason.half.model.openai.OpenAiResponsesModel.*;
+import static io.github.hi.neason.half.model.openai.ResponsesCodec.decode;
+import static io.github.hi.neason.half.model.openai.ResponsesCodec.decodeItem;
+import static io.github.hi.neason.half.model.openai.ResponsesCodec.identity;
+import static io.github.hi.neason.half.model.openai.ResponsesCodec.invalid;
+import static io.github.hi.neason.half.model.openai.ResponsesCodec.text;
 
 /** 每次订阅独立的 Responses 状态机；type 决定创建哪种 ModelEvent。 */
 final class OpenAiResponsesEventDecoder {
     private final ObjectMapper json;
     private final TreeMap<Integer, Item> items = new TreeMap<>();
-    private final HashSet<String> ids = new HashSet<>(), callIds = new HashSet<>();
+    private final HashSet<String> ids = new HashSet<>();
+    private final HashSet<String> callIds = new HashSet<>();
     private String responseId;
     private int characters;
     private boolean terminal;
 
-    OpenAiResponsesEventDecoder(ObjectMapper json) { this.json = json; }
+    OpenAiResponsesEventDecoder(ObjectMapper json) {
+        this.json = json;
+    }
 
     List<ModelEvent> accept(String data) throws ModelProtocolException {
-        if (terminal) throw invalid("Event after terminal response");
+        if (terminal) {
+            throw invalid("Event after terminal response");
+        }
         JsonNode root = OpenAiJson.decodeObject(json, data);
         String type = text(root, "type");
-        if (root.hasNonNull("response_id")) checkResponseId(identity(root, "response_id"));
+        if (root.hasNonNull("response_id")) {
+            checkResponseId(identity(root, "response_id"));
+        }
         List<ModelEvent> events = new ArrayList<>();
         switch (type) {
-            case "response.created", "response.in_progress" -> {
-                checkResponseId(identity(root.path("response"), "id"));
-                if (!"in_progress".equals(text(root.path("response"), "status"))) throw invalid("Invalid response lifecycle status");
-            }
-            case "response.output_item.added" -> {
-                int index = index(root, "output_index");
-                JsonNode value = root.path("item");
-                String id = identity(value, "id"), kind = text(value, "type");
-                if (items.size() >= 128 || items.containsKey(index) || !ids.add(id)) throw invalid("Duplicate or excessive output item");
-                Item item = new Item(id, kind);
-                count(id);
-                switch (kind) {
-                    case "message" -> {
-                        if (!"assistant".equals(text(value, "role")) || !value.path("content").isArray()
-                                || !value.path("content").isEmpty()) throw invalid("Expected empty assistant message start");
-                    }
-                    case "function_call" -> {
-                        item.callId = identity(value, "call_id");
-                        item.name = identity(value, "name");
-                        if (!callIds.add(item.callId) || callIds.size() > 64) throw invalid("Invalid tool call identities or count");
-                        count(item.callId); count(item.name);
-                        events.add(new ModelEvent.ToolCallStarted(index, item.callId, item.name));
-                        // A start item may arrive before any arguments have been generated.
-                        String initial = value.has("arguments") ? text(value, "arguments") : "";
-                        if (!initial.isEmpty()) {
-                            count(initial); item.arguments.append(initial);
-                            events.add(new ModelEvent.ToolCallDelta(index, initial));
-                        }
-                    }
-                    case "reasoning" -> { /* 不把推理项暴露为用户可见文本。 */ }
-                    default -> throw invalid("Unsupported Responses output item type");
-                }
-                items.put(index, item);
-            }
-            case "response.content_part.added" -> {
-                Item item = item(root, "message");
-                int partIndex = index(root, "content_index");
-                JsonNode part = root.path("part");
-                String kind = text(part, "type");
-                if (!List.of("output_text", "refusal").contains(kind) || !text(part, kind.equals("refusal") ? "refusal" : "text").isEmpty()
-                        || item.parts.size() >= 128 || partIndex != item.parts.size()) throw invalid("Invalid content part start");
-                item.parts.put(partIndex, new Part(kind));
-            }
-            case "response.output_text.delta", "response.refusal.delta" -> {
-                Part part = part(root);
-                boolean refusal = type.equals("response.refusal.delta");
-                if (!part.kind.equals(refusal ? "refusal" : "output_text")) throw invalid("Delta type does not match content part");
-                if (part.textDone || part.done) throw invalid("Text delta after completion");
-                String delta = text(root, "delta");
-                count(delta); part.text.append(delta);
-                if (!delta.isEmpty()) events.add(refusal ? new ModelEvent.RefusalDelta(delta) : new ModelEvent.TextDelta(delta));
-            }
-            case "response.output_text.done", "response.refusal.done" -> {
-                Part part = part(root);
-                boolean refusal = type.equals("response.refusal.done");
-                if (!part.kind.equals(refusal ? "refusal" : "output_text")) throw invalid("Completion type does not match content part");
-                if (part.textDone || part.done || !part.text.toString().equals(text(root, refusal ? "refusal" : "text"))) throw invalid("Text completion does not match deltas");
-                part.textDone = true;
-            }
-            case "response.content_part.done" -> {
-                Part part = part(root);
-                JsonNode value = root.path("part");
-                if (part.done || !part.textDone || !part.kind.equals(text(value, "type"))
-                        || !part.text.toString().equals(text(value, part.kind.equals("refusal") ? "refusal" : "text"))) throw invalid("Invalid text part completion");
-                part.done = true;
-            }
-            case "response.function_call_arguments.delta" -> {
-                Item item = item(root, "function_call");
-                if (item.argumentsDone) throw invalid("Arguments delta after completion");
-                String delta = text(root, "delta");
-                count(delta); item.arguments.append(delta);
-                if (!delta.isEmpty()) events.add(new ModelEvent.ToolCallDelta(index(root, "output_index"), delta));
-            }
-            case "response.function_call_arguments.done" -> {
-                Item item = item(root, "function_call");
-                if (item.argumentsDone || !item.arguments.toString().equals(text(root, "arguments"))) throw invalid("Arguments completion does not match deltas");
-                // incomplete 响应可能带有截断参数；只有 output_item.done 的 completed 调用才可交付。
-                item.argumentsDone = true;
-            }
-            case "response.output_item.done" -> {
-                int index = index(root, "output_index");
-                Item item = items.get(index);
-                if (item == null || item.done) throw invalid("Output item was not started or is already done");
-                JsonNode value = root.path("item");
-                validateItem(item, value);
-                if (item.kind.equals("function_call")) {
-                    if (!item.argumentsDone) throw invalid("Missing arguments completion");
-                    events.add(new ModelEvent.ToolCallCompleted(index, (ContentBlock.ToolCall) item.content().get(0)));
-                } else if (item.kind.equals("message") && item.parts.values().stream().anyMatch(p -> !p.done)) {
-                    throw invalid("Missing text part completion");
-                }
-                if (item.kind.equals("reasoning")) {
-                    boolean incomplete = "incomplete".equals(value.path("status").asText());
-                    if (!incomplete) {
-                        if (item.summary.values().stream().anyMatch(p -> !p.done)
-                                || item.reasoningText.values().stream().anyMatch(p -> !p.textDone)) throw invalid("Missing reasoning part completion");
-                        if (value.hasNonNull("status") && !"completed".equals(text(value, "status"))) throw invalid("Reasoning item is not complete");
-                        events.add(new ModelEvent.ReasoningCompleted(index, item.reasoning));
-                    }
-                }
-                item.done = true;
-            }
-            case "response.completed", "response.incomplete" -> {
-                JsonNode response = root.path("response");
-                checkResponseId(identity(response, "id"));
-                if (!type.equals("response." + text(response, "status"))) throw invalid("Terminal event and response status disagree");
-                ChatResponse result = decode(json, response);
-                JsonNode output = response.path("output");
-                if (output.size() != items.size()) throw invalid("Terminal output does not match streamed items");
-                for (int i = 0; i < output.size(); i++) {
-                    Item item = items.get(i);
-                    if (item == null || type.equals("response.completed") && !item.done) throw invalid("Missing output item completion");
-                    validateItem(item, output.get(i));
-                }
-                result.usage().ifPresent(usage -> events.add(new ModelEvent.Usage(usage)));
-                events.add(new ModelEvent.Completed(result));
-                terminal = true;
-            }
+            case "response.created", "response.in_progress" -> startResponse(root);
+            case "response.output_item.added" -> addOutputItem(root, events);
+            case "response.content_part.added" -> addContentPart(root);
+            case "response.output_text.delta", "response.refusal.delta" -> appendText(root, type, events);
+            case "response.output_text.done", "response.refusal.done" -> finishText(root, type);
+            case "response.content_part.done" -> finishContentPart(root);
+            case "response.function_call_arguments.delta" -> appendArguments(root, events);
+            case "response.function_call_arguments.done" -> finishArguments(root);
+            case "response.output_item.done" -> finishOutputItem(root, events);
+            case "response.completed", "response.incomplete" -> finishResponse(root, type, events);
             case "response.failed", "error" -> throw invalid("Responses stream reported failure");
-            case "response.output_text.annotation.added" -> { part(root); /* 当前内容抽象不保留引用注解。 */ }
-            case "response.reasoning_summary_part.added" -> {
-                Item item = item(root, "reasoning");
-                int index = index(root, "summary_index");
-                JsonNode part = root.path("part");
-                // Some compatible providers omit the empty text at part start; done events still require it.
-                if (index != item.summary.size() || !"summary_text".equals(text(part, "type"))
-                        || part.has("text") && !text(part, "text").isEmpty()) {
-                    throw invalid("Invalid reasoning summary start");
-                }
-                item.summary.put(index, new Part("summary_text"));
+            case "response.output_text.annotation.added" -> {
+                // 校验所属内容块；引用注解保留在最终快照中。
+                part(root);
             }
-            case "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
-                Item item = item(root, "reasoning");
-                boolean summary = type.equals("response.reasoning_summary_text.delta");
-                int index = index(root, summary ? "summary_index" : "content_index");
-                var parts = summary ? item.summary : item.reasoningText;
-                if (summary && !parts.containsKey(index)) throw invalid("Reasoning summary was not started");
-                Part part = parts.computeIfAbsent(index, ignored -> new Part("reasoning_text"));
-                if (part.textDone || part.done) throw invalid("Reasoning delta after completion");
-                String delta = text(root, "delta");
-                count(delta); part.text.append(delta);
-                if (!delta.isEmpty()) events.add(new ModelEvent.ReasoningDelta(index(root, "output_index"), index, summary, delta));
-            }
-            case "response.reasoning_summary_text.done", "response.reasoning_text.done" -> {
-                Item item = item(root, "reasoning");
-                boolean summary = type.equals("response.reasoning_summary_text.done");
-                int index = index(root, summary ? "summary_index" : "content_index");
-                var parts = summary ? item.summary : item.reasoningText;
-                Part part = parts.get(index);
-                // 空推理文本可能只有 done，仍校验索引并记录其空片段。
-                if (part == null && !summary && text(root, "text").isEmpty()) {
-                    part = new Part("reasoning_text"); parts.put(index, part);
-                }
-                if (part == null || part.textDone || !part.text.toString().equals(text(root, "text"))) throw invalid("Reasoning completion does not match deltas");
-                part.textDone = true;
-            }
-            case "response.reasoning_summary_part.done" -> {
-                Item item = item(root, "reasoning");
-                Part part = item.summary.get(index(root, "summary_index"));
-                JsonNode value = root.path("part");
-                if (part == null || part.done || !part.textDone || !"summary_text".equals(text(value, "type"))
-                        || !part.text.toString().equals(text(value, "text"))) throw invalid("Invalid reasoning summary completion");
-                part.done = true;
-            }
+            case "response.reasoning_summary_part.added" -> addReasoningSummary(root);
+            case "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> appendReasoningText(root, type, events);
+            case "response.reasoning_summary_text.done", "response.reasoning_text.done" -> finishReasoningText(root, type);
+            case "response.reasoning_summary_part.done" -> finishReasoningSummary(root);
             default -> throw invalid("Unsupported Responses stream event type");
         }
         return events;
     }
 
+    private void startResponse(JsonNode root) throws ModelProtocolException {
+        checkResponseId(identity(root.path("response"), "id"));
+        if (!"in_progress".equals(text(root.path("response"), "status"))) {
+            throw invalid("Invalid response lifecycle status");
+        }
+    }
+
+    private void addOutputItem(JsonNode root, List<ModelEvent> events) throws ModelProtocolException {
+        int index = index(root, "output_index");
+        JsonNode value = root.path("item");
+        String id = identity(value, "id");
+        String kind = text(value, "type");
+        if (items.size() >= 128 || items.containsKey(index) || !ids.add(id)) {
+            throw invalid("Duplicate or excessive output item");
+        }
+        Item item = new Item(id, kind);
+        countCharacters(id);
+        switch (kind) {
+            case "message" -> {
+                if (!"assistant".equals(text(value, "role")) || !value.path("content").isArray()
+                        || !value.path("content").isEmpty()) {
+                    throw invalid("Expected empty assistant message start");
+                }
+            }
+            case "function_call" -> {
+                item.callId = identity(value, "call_id");
+                item.name = identity(value, "name");
+                if (!callIds.add(item.callId) || callIds.size() > 64) {
+                    throw invalid("Invalid tool call identities or count");
+                }
+                countCharacters(item.callId);
+                countCharacters(item.name);
+                events.add(new ModelEvent.ToolCallStarted(index, item.callId, item.name));
+                // A start item may arrive before any arguments have been generated.
+                String initial = value.has("arguments") ? text(value, "arguments") : "";
+                if (!initial.isEmpty()) {
+                    countCharacters(initial);
+                    item.arguments.append(initial);
+                    events.add(new ModelEvent.ToolCallDelta(index, initial));
+                }
+            }
+            case "reasoning" -> { /* 不把推理项暴露为用户可见文本。 */ }
+            default -> throw invalid("Unsupported Responses output item type");
+        }
+        items.put(index, item);
+    }
+
+    private void addContentPart(JsonNode root) throws ModelProtocolException {
+        Item item = item(root, "message");
+        int partIndex = index(root, "content_index");
+        JsonNode part = root.path("part");
+        String kind = text(part, "type");
+        if (!List.of("output_text", "refusal").contains(kind)
+                || !text(part, kind.equals("refusal") ? "refusal" : "text").isEmpty()
+                || item.parts.size() >= 128 || partIndex != item.parts.size()) {
+            throw invalid("Invalid content part start");
+        }
+        item.parts.put(partIndex, new Part(kind));
+    }
+
+    private void appendText(JsonNode root, String type, List<ModelEvent> events) throws ModelProtocolException {
+        Part part = part(root);
+        boolean refusal = type.equals("response.refusal.delta");
+        if (!part.kind.equals(refusal ? "refusal" : "output_text")) {
+            throw invalid("Delta type does not match content part");
+        }
+        if (part.textDone || part.done) {
+            throw invalid("Text delta after completion");
+        }
+        String delta = text(root, "delta");
+        countCharacters(delta);
+        part.text.append(delta);
+        if (!delta.isEmpty()) {
+            events.add(refusal ? new ModelEvent.RefusalDelta(delta) : new ModelEvent.TextDelta(delta));
+        }
+    }
+
+    private void finishText(JsonNode root, String type) throws ModelProtocolException {
+        Part part = part(root);
+        boolean refusal = type.equals("response.refusal.done");
+        if (!part.kind.equals(refusal ? "refusal" : "output_text")) {
+            throw invalid("Completion type does not match content part");
+        }
+        if (part.textDone || part.done || !part.text.toString().equals(text(root, refusal ? "refusal" : "text"))) {
+            throw invalid("Text completion does not match deltas");
+        }
+        part.textDone = true;
+    }
+
+    private void finishContentPart(JsonNode root) throws ModelProtocolException {
+        Part part = part(root);
+        JsonNode value = root.path("part");
+        if (part.done || !part.textDone || !part.kind.equals(text(value, "type"))
+                || !part.text.toString().equals(text(value, part.kind.equals("refusal") ? "refusal" : "text"))) {
+            throw invalid("Invalid text part completion");
+        }
+        part.done = true;
+    }
+
+    private void appendArguments(JsonNode root, List<ModelEvent> events) throws ModelProtocolException {
+        Item item = item(root, "function_call");
+        if (item.argumentsDone) {
+            throw invalid("Arguments delta after completion");
+        }
+        String delta = text(root, "delta");
+        countCharacters(delta);
+        item.arguments.append(delta);
+        if (!delta.isEmpty()) {
+            events.add(new ModelEvent.ToolCallDelta(index(root, "output_index"), delta));
+        }
+    }
+
+    private void finishArguments(JsonNode root) throws ModelProtocolException {
+        Item item = item(root, "function_call");
+        if (item.argumentsDone || !item.arguments.toString().equals(text(root, "arguments"))) {
+            throw invalid("Arguments completion does not match deltas");
+        }
+        // incomplete 响应可能带有截断参数；只有 output_item.done 的 completed 调用才可交付。
+        item.argumentsDone = true;
+    }
+
+    private void finishOutputItem(JsonNode root, List<ModelEvent> events) throws ModelProtocolException {
+        int index = index(root, "output_index");
+        Item item = items.get(index);
+        if (item == null || item.done) {
+            throw invalid("Output item was not started or is already done");
+        }
+        JsonNode value = root.path("item");
+        validateItem(item, value);
+        if (item.kind.equals("function_call")) {
+            if (!item.argumentsDone) {
+                throw invalid("Missing arguments completion");
+            }
+            events.add(new ModelEvent.ToolCallCompleted(index, (ContentBlock.ToolCall) item.content().get(0)));
+        } else if (item.kind.equals("message") && item.parts.values().stream().anyMatch(p -> !p.done)) {
+            throw invalid("Missing text part completion");
+        }
+        if (item.kind.equals("reasoning")) {
+            boolean incomplete = "incomplete".equals(value.path("status").asText());
+            if (!incomplete) {
+                if (item.summary.values().stream().anyMatch(p -> !p.done)
+                        || item.reasoningText.values().stream().anyMatch(p -> !p.textDone)) {
+                    throw invalid("Missing reasoning part completion");
+                }
+                if (value.hasNonNull("status") && !"completed".equals(text(value, "status"))) {
+                    throw invalid("Reasoning item is not complete");
+                }
+                events.add(new ModelEvent.ReasoningCompleted(index, item.reasoning));
+            }
+        }
+        item.done = true;
+    }
+
+    private void finishResponse(JsonNode root, String type, List<ModelEvent> events) throws ModelProtocolException {
+        JsonNode response = root.path("response");
+        checkResponseId(identity(response, "id"));
+        if (!type.equals("response." + text(response, "status"))) {
+            throw invalid("Terminal event and response status disagree");
+        }
+        ChatResponse result = decode(json, response);
+        JsonNode output = response.path("output");
+        if (output.size() != items.size()) {
+            throw invalid("Terminal output does not match streamed items");
+        }
+        for (int i = 0; i < output.size(); i++) {
+            Item item = items.get(i);
+            if (item == null || type.equals("response.completed") && !item.done) {
+                throw invalid("Missing output item completion");
+            }
+            validateItem(item, output.get(i));
+        }
+        result.usage().ifPresent(usage -> events.add(new ModelEvent.Usage(usage)));
+        events.add(new ModelEvent.Completed(result));
+        terminal = true;
+    }
+
+    private void addReasoningSummary(JsonNode root) throws ModelProtocolException {
+        Item item = item(root, "reasoning");
+        int index = index(root, "summary_index");
+        JsonNode part = root.path("part");
+        // Some compatible providers omit the empty text at part start; done events still require it.
+        if (index != item.summary.size() || !"summary_text".equals(text(part, "type"))
+                || part.has("text") && !text(part, "text").isEmpty()) {
+            throw invalid("Invalid reasoning summary start");
+        }
+        item.summary.put(index, new Part("summary_text"));
+    }
+
+    private void appendReasoningText(JsonNode root, String type, List<ModelEvent> events) throws ModelProtocolException {
+        Item item = item(root, "reasoning");
+        boolean summary = type.equals("response.reasoning_summary_text.delta");
+        int index = index(root, summary ? "summary_index" : "content_index");
+        var parts = summary ? item.summary : item.reasoningText;
+        if (summary && !parts.containsKey(index)) {
+            throw invalid("Reasoning summary was not started");
+        }
+        Part part = parts.computeIfAbsent(index, ignored -> new Part("reasoning_text"));
+        if (part.textDone || part.done) {
+            throw invalid("Reasoning delta after completion");
+        }
+        String delta = text(root, "delta");
+        countCharacters(delta);
+        part.text.append(delta);
+        if (!delta.isEmpty()) {
+            events.add(new ModelEvent.ReasoningDelta(index(root, "output_index"), index, summary, delta));
+        }
+    }
+
+    private void finishReasoningText(JsonNode root, String type) throws ModelProtocolException {
+        Item item = item(root, "reasoning");
+        boolean summary = type.equals("response.reasoning_summary_text.done");
+        int index = index(root, summary ? "summary_index" : "content_index");
+        var parts = summary ? item.summary : item.reasoningText;
+        Part part = parts.get(index);
+        // 空推理文本可能只有 done，仍校验索引并记录其空片段。
+        if (part == null && !summary && text(root, "text").isEmpty()) {
+            part = new Part("reasoning_text");
+            parts.put(index, part);
+        }
+        if (part == null || part.textDone || !part.text.toString().equals(text(root, "text"))) {
+            throw invalid("Reasoning completion does not match deltas");
+        }
+        part.textDone = true;
+    }
+
+    private void finishReasoningSummary(JsonNode root) throws ModelProtocolException {
+        Item item = item(root, "reasoning");
+        Part part = item.summary.get(index(root, "summary_index"));
+        JsonNode value = root.path("part");
+        if (part == null || part.done || !part.textDone || !"summary_text".equals(text(value, "type"))
+                || !part.text.toString().equals(text(value, "text"))) {
+            throw invalid("Invalid reasoning summary completion");
+        }
+        part.done = true;
+    }
+
     private void validateItem(Item item, JsonNode value) throws ModelProtocolException {
-        if (!item.id.equals(identity(value, "id")) || !item.kind.equals(text(value, "type"))) throw invalid("Output item identity changed");
+        if (!item.id.equals(identity(value, "id")) || !item.kind.equals(text(value, "type"))) {
+            throw invalid("Output item identity changed");
+        }
         List<ContentBlock> decoded = decodeItem(json, value);
         if (item.kind.equals("reasoning")) {
             ContentBlock.Reasoning reasoning = (ContentBlock.Reasoning) decoded.getFirst();
             checkReasoning(item.summary, reasoning.summary());
             checkReasoning(item.reasoningText, reasoning.content());
-            if (item.reasoning != null && !item.reasoning.equals(reasoning)) throw invalid("Reasoning output changed after completion");
+            if (item.reasoning != null && !item.reasoning.equals(reasoning)) {
+                throw invalid("Reasoning output changed after completion");
+            }
             if (item.reasoning == null) {
                 // 最终快照包含加密内容；这些字符也计入每订阅的输出上限。
-                if (reasoning.encryptedContent() != null) count(reasoning.encryptedContent());
-                for (int i = 0; i < reasoning.summary().size(); i++) if (!item.summary.containsKey(i)) count(reasoning.summary().get(i));
-                for (int i = 0; i < reasoning.content().size(); i++) if (!item.reasoningText.containsKey(i)) count(reasoning.content().get(i));
+                if (reasoning.encryptedContent() != null) {
+                    countCharacters(reasoning.encryptedContent());
+                }
+                for (int i = 0; i < reasoning.summary().size(); i++) {
+                    if (!item.summary.containsKey(i)) {
+                        countCharacters(reasoning.summary().get(i));
+                    }
+                }
+                for (int i = 0; i < reasoning.content().size(); i++) {
+                    if (!item.reasoningText.containsKey(i)) {
+                        countCharacters(reasoning.content().get(i));
+                    }
+                }
                 item.reasoning = reasoning;
             }
-        } else if (!item.content().equals(decoded)) throw invalid("Output item does not match streamed content");
+        } else if (!item.content().equals(decoded)) {
+            throw invalid("Output item does not match streamed content");
+        }
     }
 
     private static void checkReasoning(TreeMap<Integer, Part> streamed, List<String> complete) throws ModelProtocolException {
@@ -237,17 +355,23 @@ final class OpenAiResponsesEventDecoder {
 
     private Part part(JsonNode root) throws ModelProtocolException {
         Part part = item(root, "message").parts.get(index(root, "content_index"));
-        if (part == null) throw invalid("Text part was not started");
+        if (part == null) {
+            throw invalid("Text part was not started");
+        }
         return part;
     }
 
     private void checkResponseId(String id) throws ModelProtocolException {
-        if (responseId != null && !responseId.equals(id)) throw invalid("Response identity changed");
+        if (responseId != null && !responseId.equals(id)) {
+            throw invalid("Response identity changed");
+        }
         responseId = id;
     }
 
-    private void count(String fragment) throws ModelProtocolException {
-        if (fragment.length() > 4 * 1024 * 1024 - characters) throw invalid("Model output exceeds the 4 Mi character limit");
+    private void countCharacters(String fragment) throws ModelProtocolException {
+        if (fragment.length() > 4 * 1024 * 1024 - characters) {
+            throw invalid("Model output exceeds the 4 Mi character limit");
+        }
         characters += fragment.length();
     }
 
@@ -261,20 +385,30 @@ final class OpenAiResponsesEventDecoder {
 
     private static final class Part {
         final String kind;
-        Part(String kind) { this.kind = kind; }
+        Part(String kind) {
+            this.kind = kind;
+        }
         final StringBuilder text = new StringBuilder();
-        boolean textDone, done;
+        boolean textDone;
+        boolean done;
     }
 
     private static final class Item {
-        final String id, kind;
+        final String id;
+        final String kind;
         final TreeMap<Integer, Part> parts = new TreeMap<>();
-        final TreeMap<Integer, Part> summary = new TreeMap<>(), reasoningText = new TreeMap<>();
+        final TreeMap<Integer, Part> summary = new TreeMap<>();
+        final TreeMap<Integer, Part> reasoningText = new TreeMap<>();
         ContentBlock.Reasoning reasoning;
         final StringBuilder arguments = new StringBuilder();
-        String callId, name;
-        boolean argumentsDone, done;
-        Item(String id, String kind) { this.id = id; this.kind = kind; }
+        String callId;
+        String name;
+        boolean argumentsDone;
+        boolean done;
+        Item(String id, String kind) {
+            this.id = id;
+            this.kind = kind;
+        }
         List<ContentBlock> content() {
             if (kind.equals("function_call")) return List.of(new ContentBlock.ToolCall(callId, name, arguments.toString()));
             if (kind.equals("reasoning")) return reasoning == null ? List.of() : List.of(reasoning);

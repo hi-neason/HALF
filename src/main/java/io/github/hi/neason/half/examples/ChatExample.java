@@ -47,6 +47,15 @@ public final class ChatExample {
     }
 
     private static void run(ChatModel model, String[] args) throws Exception {
+        if (args.length > 0 && "--structured-output".equals(args[0])) {
+            var results = StructuredOutputExample.run(model);
+            results.forEach(System.out::println);
+            System.out.println("提示词组通过不证明 Schema 在服务端受到强制约束；单次观测不代表稳定支持。");
+            if (results.stream().anyMatch(result -> !result.status().equals("PASS"))) {
+                throw new IllegalStateException("Structured output checks did not all pass");
+            }
+            return;
+        }
         boolean streaming = args.length > 0 && "--stream".equals(args[0]);
         boolean events = args.length > 0 && "--events".equals(args[0]);
         String[] promptArgs = streaming || events ? Arrays.copyOfRange(args, 1, args.length) : args;

@@ -3,6 +3,7 @@ package io.github.hi.neason.half.model.openai;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hi.neason.half.model.ContentBlock;
+import io.github.hi.neason.half.model.http.ModelStream;
 import io.github.hi.neason.half.model.ModelEvent;
 import io.github.hi.neason.half.model.ModelProtocolException;
 import org.junit.jupiter.api.Test;
@@ -144,7 +145,7 @@ class ModelEventStreamTest {
             output.subscription.request(1);
             depth.decrementAndGet();
         };
-        var stream = new OpenAiStream(new ObjectMapper(), output, current -> {
+        var stream = new ModelStream(new OpenAiEventDecoder(new ObjectMapper())::accept, output, current -> {
             calls.incrementAndGet();
             current.onSubscribe(new Flow.Subscription() {
                 @Override public void request(long n) {
@@ -252,7 +253,7 @@ class ModelEventStreamTest {
         final AtomicInteger started = new AtomicInteger(), released = new AtomicInteger();
         final AtomicLong permits = new AtomicLong();
         boolean inputCancelled;
-        final OpenAiStream stream = new OpenAiStream(new ObjectMapper(), output, value -> {
+        final ModelStream stream = new ModelStream(new OpenAiEventDecoder(new ObjectMapper())::accept, output, value -> {
             started.incrementAndGet();
             value.onSubscribe(new Flow.Subscription() {
                 @Override public void request(long n) { permits.addAndGet(n); }

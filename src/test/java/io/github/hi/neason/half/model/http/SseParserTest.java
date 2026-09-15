@@ -1,4 +1,4 @@
-package io.github.hi.neason.half.model.openai;
+package io.github.hi.neason.half.model.http;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;

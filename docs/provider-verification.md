@@ -51,3 +51,17 @@ Responses 服务在 `response.reasoning_summary_part.added` 中可能省略空 `
 结构化输出请求使用官方 Messages 字段 `output_config.format`，Schema 要求对象包含布尔属性 `ok`。虽然 HTTP 请求成功，正文却带有说明和代码围栏，严格 JSON 解析失败。因此不能将此服务的 Messages 结构化输出记为已验证支持，也不通过剥离 Markdown 掩盖格式不符合的问题。此前 Chat Completions / Responses 的结构化输出通过，不代表 Messages 路由也支持相同能力。
 
 本次没有验证图片输入、显式 thinking 预算或 adaptive 配置、隐藏推理块及其他高级端点；也没有调用官方 Anthropic 服务。
+
+### 结构化输出对照复测
+
+2026-09-15 使用同一 Messages 端点、模型和 2048 token 上限，各执行一次独立请求。可通过 `ChatExample --structured-output` 重复运行；不自动重试。
+
+| 组别 | 提示词 | Schema | 结果 |
+| --- | --- | --- | --- |
+| `prompt_only` | 明确要求只有一个 JSON 对象、只有布尔属性 ok=true、无说明和代码围栏 | 无 | PASS |
+| `schema_only` | 返回 ok 为 true 的 JSON 对象 | 有 | INVALID_JSON |
+| `prompt_and_schema` | 与 prompt_only 完全相同 | 与 schema_only 完全相同 | PASS |
+
+三组均正常结束（`end_turn`）。PASS 必须同时满足：正常结束、非空正文、整个正文可严格解析为单个 JSON 对象、只有 `ok` 字段、类型为 boolean 且值为 true。不转换字符串/数字类型，不提取代码块，拒绝重复字段与尾随 JSON。失败区分请求错误、非正常结束、意外内容、空正文、JSON 格式错误、Schema 不匹配和业务值不匹配。这里的字段检查只针对固定测试 Schema，不是通用校验器。
+
+结论：本次加强提示词后可以得到合规输出，但无 Schema 的同提示词对照组也通过，仅 Schema 组仍失败。因此这是提示词引导有效的证据，不能当作厂商强制 Schema 约束生效的证据，也不以一次通过宣称稳定支持。原始失败记录保留。

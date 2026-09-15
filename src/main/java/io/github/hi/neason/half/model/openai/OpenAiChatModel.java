@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hi.neason.half.model.ChatMessage;
 import io.github.hi.neason.half.model.ChatRequest;
+import io.github.hi.neason.half.model.http.ModelStream;
 import io.github.hi.neason.half.model.ChatResponse;
 import io.github.hi.neason.half.model.ContentBlock;
 import io.github.hi.neason.half.model.ModelProtocolException;
@@ -27,7 +28,7 @@ public final class OpenAiChatModel extends OpenAiHttpModel {
     }
 
     @Override
-    protected OpenAiStream.EventDecoder newEventDecoder() { return new OpenAiEventDecoder(json)::accept; }
+    protected ModelStream.EventDecoder newEventDecoder() { return new OpenAiEventDecoder(json)::accept; }
 
     @Override
     protected String encodeRequest(ChatRequest request, boolean streaming) throws IOException {

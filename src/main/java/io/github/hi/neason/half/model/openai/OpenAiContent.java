@@ -49,7 +49,7 @@ final class OpenAiContent {
                 var decoded = new java.util.ArrayList<ContentBlock>();
                 for (String snapshot : message.outputItemsJson()) {
                     var value = OpenAiJson.decodeObject(json, snapshot);
-                    decoded.addAll(OpenAiResponsesModel.decodeItem(json, value));
+                    decoded.addAll(ResponsesCodec.decodeItem(json, value));
                     if ("function_call".equals(value.path("type").asText()) && !callIds.add(value.path("call_id").asText())) {
                         throw new IllegalArgumentException("Duplicate tool call id");
                     }

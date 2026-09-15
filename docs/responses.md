@@ -70,6 +70,8 @@ Responses 不等待 `[DONE]`；读取到合法的终止事件后停止 HTTP 读�
 
 [HttpChatModel](../src/main/java/io/github/hi/neason/half/model/http/HttpChatModel.java) 共用 HTTP、总时限、关闭与文本回调；[ModelStream](../src/main/java/io/github/hi/neason/half/model/http/ModelStream.java) 共用 SSE 分帧、冷订阅、`request(n)` 和取消。每个订阅有独立的协议解码器，只有首次正需求量才发请求。
 
+[ResponsesCodec](../src/main/java/io/github/hi/neason/half/model/openai/ResponsesCodec.java) 集中完整响应、输出项和字段校验的纯协议解析，供模型入口、历史回放和流式终态共用。[OpenAiResponsesEventDecoder](../src/main/java/io/github/hi/neason/half/model/openai/OpenAiResponsesEventDecoder.java) 的 `accept` 负责分发事件，各事件处理方法维护对应状态；一个 SSE 帧完成校验后才返回本帧的事件列表。
+
 单 SSE 帧最多 1 Mi 字符，累计可见文本、工具参数和身份字段最多 4 Mi 字符；最多 128 个输出项、每条消息 128 个文本块、64 个工具调用。上层背压限制交付和继续读取，不保证远端模型暂停生成。
 
 模型入口已支持图片/文件输入、拒绝和推理内容；推理 ID、摘要、正文与加密内容可通过 `assistantResponse` 回传，仍不混入 `text()`。引用注解、音频、内置工具等未映射的结构使用保留 JSON 的官方 API client；资源端点、后台响应查询及请求选项见 [官方协议覆盖](official-api.md)。当前模型抽象不保留所有官方扩展字段，不承诺整个响应的无损往返。

@@ -47,9 +47,14 @@ mvn compile exec:java -Dexec.args="--stream 用一句话解释 SSE"
 
 # 订阅结构化事件，每处理一条再 request(1)
 mvn compile exec:java -Dexec.args="--events 用一句话解释背压"
+
+# 三组独立真实请求：仅明确提示词、仅 Schema、明确提示词 + Schema
+mvn compile exec:java -Dexec.args="--structured-output"
 ```
 
 该示例会实际调用配置的模型服务。仅用本地测试时无需设置上述变量。
+
+结构化输出对照用例严格校验整个正文，不剥离代码围栏；区分 JSON 格式、固定 Schema、业务值和结束原因。任何组失败都会以失败退出；提示词组通过不代表服务端强制执行了 Schema。该校验仅针对示例的 `{"ok": true}`，不是通用 JSON Schema 校验器。
 
 ## 框架定位
 

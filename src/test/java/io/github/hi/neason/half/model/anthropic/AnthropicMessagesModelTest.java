@@ -263,6 +263,50 @@ class AnthropicMessagesModelTest {
         assertEquals("https://example.org/test.png", captured.get().at("/messages/0/content/1/source/url").asText());
     }
 
+    @Test void base64ImagesPreserveMediaTypeAndEncodedData() throws Exception {
+        json(SUCCESS);
+        try (var model = model()) {
+            model.chat(new ChatRequest(List.of(new ChatMessage(ChatMessage.Role.USER,
+                    List.of(new ContentBlock.Image("data:image/png;base64,AQID")), null)), 128));
+        }
+        assertEquals("image", captured.get().at("/messages/0/content/0/type").asText());
+        assertEquals("base64", captured.get().at("/messages/0/content/0/source/type").asText());
+        assertEquals("image/png", captured.get().at("/messages/0/content/0/source/media_type").asText());
+        assertEquals("AQID", captured.get().at("/messages/0/content/0/source/data").asText());
+    }
+
+    @Test void adjacentUserMessagesMergeContentInOriginalOrder() throws Exception {
+        json(SUCCESS);
+        try (var model = model()) {
+            model.chat(new ChatRequest(List.of(ChatMessage.user("first"), ChatMessage.user("second")), 128));
+        }
+        assertEquals(1, captured.get().path("messages").size());
+        assertEquals("user", captured.get().at("/messages/0/role").asText());
+        assertEquals(2, captured.get().at("/messages/0/content").size());
+        assertEquals("first", captured.get().at("/messages/0/content/0/text").asText());
+        assertEquals("second", captured.get().at("/messages/0/content/1/text").asText());
+    }
+
+    @Test void thinkingDeltaAfterSignatureIsRejected() throws Exception {
+        var decoder = new AnthropicEventDecoder(JSON);
+        decoder.accept("{\"type\":\"message_start\",\"message\":"
+                + SUCCESS.replace("{\"type\":\"text\",\"text\":\"你好\"}", "")
+                        .replace("\"end_turn\"", "null") + "}");
+        decoder.accept("""
+                {"type":"content_block_start","index":0,
+                 "content_block":{"type":"thinking","thinking":"","signature":""}}
+                """);
+        decoder.accept("""
+                {"type":"content_block_delta","index":0,
+                 "delta":{"type":"signature_delta","signature":"opaque"}}
+                """);
+        var error = assertThrows(ModelProtocolException.class, () -> decoder.accept("""
+                {"type":"content_block_delta","index":0,
+                 "delta":{"type":"thinking_delta","thinking":"too late"}}
+                """));
+        assertEquals("Thinking after signature", error.getMessage());
+    }
+
     @Test void textStreamPreservesCumulativeUsageAndFinishesAtMessageStop() throws Exception {
         respond(200, "text/event-stream; charset=utf-8", textStream());
         try (var model = model()) {
