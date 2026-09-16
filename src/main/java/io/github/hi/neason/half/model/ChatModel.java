@@ -7,6 +7,8 @@ import java.util.concurrent.Flow;
 /** 模型的最小抽象：输入消息，得到一次完整响应；不维护会话或推进 Agent 循环。 */
 @FunctionalInterface
 public interface ChatModel {
+
+    /** 基础的同步方式单次大模型调用 */
     ChatResponse chat(ChatRequest request) throws IOException, InterruptedException;
 
     /** 冷流：每次订阅独立调用模型，正数 request(n) 后才开始请求；取消停止该次调用。 */
