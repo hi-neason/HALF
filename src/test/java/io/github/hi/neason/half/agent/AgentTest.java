@@ -43,14 +43,20 @@ class AgentTest {
                 "tool_calls", Optional.empty(), replay);
         var requests = new ArrayList<ChatRequest>();
         var executed = new ArrayList<String>();
-        var agent = Agent.builder().tool(contextTool(context -> {
+        var agent = Agent.builder().maxTurns(8).tool(contextTool(context -> {
             executed.add(context.callId());
             return new ToolOutput("result-" + context.callId());
         })).model(request -> {
             requests.add(request);
-            return requests.size() == 1 ? response : text("done");
+            return switch (requests.size()) {
+                case 1 -> response;
+                case 2 -> text("done");
+                default -> throw new AssertionError("Must stop after the final answer despite remaining turn budget");
+            };
         }).build();
         var result = agent.run("question");
+        assertEquals(COMPLETED, result.stopReason());
+        assertEquals(2, requests.size());
         assertEquals(List.of("a", "b"), executed);
         assertEquals(2, result.modelCalls());
         assertEquals("done", result.text());

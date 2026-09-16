@@ -58,7 +58,7 @@ final class AgentLoop {
     private AgentResult run(List<ChatMessage> history, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress,
                             Consumer<AgentEvent> events) throws InterruptedException {
         var state = new RunState(history);
-        while (state.modelCalls < maxTurns) {
+        while (true) {
             try {
                 // 组装message，调用大模型
                 var response = callModel(state, cancelled, events);
@@ -75,12 +75,15 @@ final class AgentLoop {
 
             // 即使本轮不能继续，也保留完整响应（含供应商回放数据），便于上层检查。
             state.messages.add(ChatMessage.assistantResponse(state.response));
-            var stopReason = stopReason(state);
-            if (stopReason.isPresent()) return state.result(stopReason.get(), Optional.empty());
 
-            executeTools(state, cancelled, onProgress, events);
+            // loop的跳出检查
+            var stopReason = evaluateStopReason(state);
+            if (stopReason.isPresent()) {
+                return state.result(stopReason.get(), Optional.empty());
+            } else {
+                executeTools(state, cancelled, onProgress, events);
+            }
         }
-        throw new IllegalStateException("Agent loop exhausted without a stop reason");
     }
 
     private ChatResponse callModel(RunState state, BooleanSupplier cancelled, Consumer<AgentEvent> events)
@@ -96,8 +99,13 @@ final class AgentLoop {
                 : ModelTurnStream.call(model, request, event -> events.accept(new AgentEvent.Model(turn, event)));
     }
 
-    /** 先检查响应完整性和调用合法性，再判断预算；只有整批通过才允许执行工具。 */
-    private Optional<AgentResult.StopReason> stopReason(RunState state) {
+    /**
+     * 每次模型响应后的统一停止判断；返回空值表示允许执行本轮工具，然后继续下一轮。
+     * 判断顺序：响应完整性 → 无工具则完成 → 工具调用合法性 → 轮数上限。
+     * maxTurns 是上限而非目标：正常完成立即停止，即使仍有预算；末轮完成也优先于预算耗尽。
+     * 模型异常、取消和线程中断由调用边界处理，不依赖本方法。
+     */
+    private Optional<AgentResult.StopReason> evaluateStopReason(RunState state) {
         var calls = state.response.toolCalls();
         if (!isComplete(state.response.finishReason(), !calls.isEmpty())) return Optional.of(INCOMPLETE_RESPONSE);
         if (calls.isEmpty()) return Optional.of(COMPLETED);
@@ -107,7 +115,7 @@ final class AgentLoop {
             if (!state.seenCallIds.add(call.id())) return Optional.of(INVALID_TOOL_CALLS);
         }
         // 没有下一轮模型预算时不执行工具，否则工具产生副作用后模型却无法消费结果。
-        if (state.modelCalls == maxTurns) return Optional.of(MAX_TURNS);
+        if (state.modelCalls >= maxTurns) return Optional.of(MAX_TURNS);
         return Optional.empty();
     }
 
