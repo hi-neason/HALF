@@ -164,6 +164,34 @@ class AgentTest {
     }
 
     @Test
+    void reportsDuplicateCallsBeforeTheLastTurnBudgetLimit() throws Exception {
+        var executed = new AtomicInteger();
+        var result = Agent.builder().maxTurns(1)
+                .model(request -> calls(call("duplicate"), call("duplicate")))
+                .tool(contextTool(context -> { executed.incrementAndGet(); return new ToolOutput("unexpected"); }))
+                .build().run("question");
+        assertEquals(INVALID_TOOL_CALLS, result.stopReason());
+        assertEquals(1, result.modelCalls());
+        assertEquals(0, executed.get());
+        assertTrue(result.toolResults().isEmpty());
+    }
+
+    @Test
+    void rejectsFinishReasonsThatDisagreeWithToolContent() throws Exception {
+        for (var response : List.of(
+                new ChatResponse(List.of(call("one")), "stop", Optional.empty()),
+                new ChatResponse("no tool call", "tool_calls", Optional.empty()))) {
+            var executed = new AtomicInteger();
+            var result = Agent.builder().model(request -> response)
+                    .tool(contextTool(context -> { executed.incrementAndGet(); return new ToolOutput("unexpected"); }))
+                    .build().run("question");
+            assertEquals(INCOMPLETE_RESPONSE, result.stopReason());
+            assertEquals(0, executed.get());
+            assertEquals(Optional.of(response), result.lastResponse());
+        }
+    }
+
+    @Test
     void rejectsCrossRoundDuplicatesBeforeExecutingAnyOfTheNewBatch() throws Exception {
         var turns = new AtomicInteger();
         var executed = new ArrayList<String>();
@@ -272,8 +300,9 @@ class AgentTest {
     void convertsIoFailuresToSafeMetadataAndCountsFailedAttempts() throws Exception {
         for (IOException failure : List.of(new IOException("private-token"), new ModelHttpException(429))) {
             var turns = new AtomicInteger();
+            var previous = calls(call("before-error"));
             var result = Agent.builder().model(request -> {
-                if (turns.incrementAndGet() == 1) return calls(call("before-error"));
+                if (turns.incrementAndGet() == 1) return previous;
                 throw failure;
             }).tool(contextTool(context -> new ToolOutput("ok"))).build().run("question");
             assertEquals(MODEL_ERROR, result.stopReason());
@@ -285,6 +314,9 @@ class AgentTest {
             else assertTrue(metadata.httpStatus().isEmpty());
             assertFalse(result.toString().contains("private-token"));
             assertEquals(1, result.toolResults().size());
+            assertEquals(Optional.of(previous), result.lastResponse());
+            assertEquals(List.of(ChatMessage.user("question"), ChatMessage.assistantResponse(previous),
+                    result.toolResults().getFirst().toMessage()), result.messages());
         }
     }
 

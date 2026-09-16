@@ -57,58 +57,95 @@ final class AgentLoop {
 
     private AgentResult run(List<ChatMessage> history, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress,
                             Consumer<AgentEvent> events) throws InterruptedException {
-        var messages = new ArrayList<>(history);
-        var seenCallIds = validateHistory(messages);
-        var results = new ArrayList<ToolResult>();
-        ChatResponse response = null;
-        int modelCalls = 0;
-        while (modelCalls < maxTurns) {
-            checkCancelled(cancelled);
-            var request = new ChatRequest(messages, maxOutputTokens, tools.definitions(), modelOptions);
-            modelCalls++;
-            int turn = modelCalls;
-            if (events != null) events.accept(new AgentEvent.TurnStarted(turn));
-            checkCancelled(cancelled);
+        var state = new RunState(history);
+        while (state.modelCalls < maxTurns) {
             try {
-                response = events == null ? model.chat(request)
-                        : ModelTurnStream.call(model, request, event -> events.accept(new AgentEvent.Model(turn, event)));
+                // 组装message，调用大模型
+                var response = callModel(state, cancelled, events);
+                checkCancelled(cancelled);
+                state.response = Objects.requireNonNull(response, "model response");
             } catch (IOException error) {
                 checkCancelled(cancelled);
-                var status = error instanceof ModelHttpException http ? OptionalInt.of(http.statusCode()) : OptionalInt.empty();
+                // 只暴露安全的错误元数据；保留此前完成的响应和工具结果。
+                var status = error instanceof ModelHttpException http
+                        ? OptionalInt.of(http.statusCode()) : OptionalInt.empty();
                 var failure = new AgentResult.ModelFailure(error.getClass().getSimpleName(), status);
-                return new AgentResult(MODEL_ERROR, modelCalls, messages, results,
-                        Optional.ofNullable(response), Optional.of(failure));
+                return state.result(MODEL_ERROR, Optional.of(failure));
             }
-            checkCancelled(cancelled);
-            Objects.requireNonNull(response, "model response");
-            messages.add(ChatMessage.assistantResponse(response));
-            var calls = response.toolCalls();
-            if (!isComplete(response.finishReason(), !calls.isEmpty())) {
-                return result(INCOMPLETE_RESPONSE, modelCalls, messages, results, response);
-            }
-            if (calls.isEmpty()) return result(COMPLETED, modelCalls, messages, results, response);
 
-            // 整批预检后才允许副作用，避免同一个调用在本次运行中重复执行。
-            for (var call : calls) {
-                if (!seenCallIds.add(call.id())) {
-                    return result(INVALID_TOOL_CALLS, modelCalls, messages, results, response);
-                }
-            }
-            if (modelCalls == maxTurns) return result(MAX_TURNS, modelCalls, messages, results, response);
-            for (var call : calls) {
-                checkCancelled(cancelled);
-                if (events != null) events.accept(new AgentEvent.ToolStarted(turn, call));
-                checkCancelled(cancelled);
-                var toolResult = executor.execute(call, cancelled, progress -> {
-                    onProgress.accept(progress);
-                    if (events != null) events.accept(new AgentEvent.ToolProgressed(turn, progress));
-                });
-                results.add(toolResult);
-                messages.add(toolResult.toMessage());
-                if (events != null) events.accept(new AgentEvent.ToolCompleted(turn, toolResult));
-            }
+            // 即使本轮不能继续，也保留完整响应（含供应商回放数据），便于上层检查。
+            state.messages.add(ChatMessage.assistantResponse(state.response));
+            var stopReason = stopReason(state);
+            if (stopReason.isPresent()) return state.result(stopReason.get(), Optional.empty());
+
+            executeTools(state, cancelled, onProgress, events);
         }
         throw new IllegalStateException("Agent loop exhausted without a stop reason");
+    }
+
+    private ChatResponse callModel(RunState state, BooleanSupplier cancelled, Consumer<AgentEvent> events)
+            throws IOException, InterruptedException {
+        checkCancelled(cancelled);
+        var request = new ChatRequest(state.messages, maxOutputTokens, tools.definitions(), modelOptions);
+        // 预算按请求尝试计数，失败的模型调用也占用一轮。
+        int turn = ++state.modelCalls;
+        if (events != null) events.accept(new AgentEvent.TurnStarted(turn));
+        // 订阅者可能在收到事件时取消，调用模型前必须再次检查。
+        checkCancelled(cancelled);
+        return events == null ? model.chat(request)
+                : ModelTurnStream.call(model, request, event -> events.accept(new AgentEvent.Model(turn, event)));
+    }
+
+    /** 先检查响应完整性和调用合法性，再判断预算；只有整批通过才允许执行工具。 */
+    private Optional<AgentResult.StopReason> stopReason(RunState state) {
+        var calls = state.response.toolCalls();
+        if (!isComplete(state.response.finishReason(), !calls.isEmpty())) return Optional.of(INCOMPLETE_RESPONSE);
+        if (calls.isEmpty()) return Optional.of(COMPLETED);
+
+        // 同时检查历史、本轮内部与此前轮次的重复 ID，避免部分执行后才发现无效调用。
+        for (var call : calls) {
+            if (!state.seenCallIds.add(call.id())) return Optional.of(INVALID_TOOL_CALLS);
+        }
+        // 没有下一轮模型预算时不执行工具，否则工具产生副作用后模型却无法消费结果。
+        if (state.modelCalls == maxTurns) return Optional.of(MAX_TURNS);
+        return Optional.empty();
+    }
+
+    private void executeTools(RunState state, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress,
+                              Consumer<AgentEvent> events) throws InterruptedException {
+        int turn = state.modelCalls;
+        for (var call : state.response.toolCalls()) {
+            checkCancelled(cancelled);
+            if (events != null) events.accept(new AgentEvent.ToolStarted(turn, call));
+            // 与模型调用相同，事件回调后的取消必须先于工具副作用生效。
+            checkCancelled(cancelled);
+            var result = executor.execute(call, cancelled, progress -> {
+                onProgress.accept(progress);
+                if (events != null) events.accept(new AgentEvent.ToolProgressed(turn, progress));
+            });
+            // 串行执行并立即回填历史；完成事件发出时，对应结果已被记录。
+            state.toolResults.add(result);
+            state.messages.add(result.toMessage());
+            if (events != null) events.accept(new AgentEvent.ToolCompleted(turn, result));
+        }
+    }
+
+    /** 单次运行独享的上下文，避免同步与流式入口共享可变状态。 */
+    private static final class RunState {
+        private final List<ChatMessage> messages;
+        private final Set<String> seenCallIds;
+        private final List<ToolResult> toolResults = new ArrayList<>();
+        private ChatResponse response;
+        private int modelCalls;
+
+        private RunState(List<ChatMessage> history) {
+            messages = new ArrayList<>(history);
+            seenCallIds = validateHistory(messages);
+        }
+
+        private AgentResult result(AgentResult.StopReason reason, Optional<AgentResult.ModelFailure> failure) {
+            return new AgentResult(reason, modelCalls, messages, toolResults, Optional.ofNullable(response), failure);
+        }
     }
 
     private static boolean isComplete(String finishReason, boolean hasTools) {
@@ -118,11 +155,6 @@ final class AgentLoop {
             case "stop", "end_turn" -> !hasTools;
             default -> false;
         };
-    }
-
-    private static AgentResult result(AgentResult.StopReason reason, int calls, List<ChatMessage> messages,
-                                      List<ToolResult> results, ChatResponse response) {
-        return new AgentResult(reason, calls, messages, results, Optional.of(response), Optional.empty());
     }
 
     private static Set<String> validateHistory(List<ChatMessage> messages) {
