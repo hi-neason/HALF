@@ -2,6 +2,7 @@ package io.github.hi.neason.half.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hi.neason.half.agent.state.TurnOptions;
 import io.github.hi.neason.half.model.*;
 import io.github.hi.neason.half.tool.*;
 import org.junit.jupiter.api.Test;
@@ -43,7 +44,7 @@ class AgentTest {
                 "tool_calls", Optional.empty(), replay);
         var requests = new ArrayList<ChatRequest>();
         var executed = new ArrayList<String>();
-        var agent = Agent.builder().maxTurns(8).tool(contextTool(context -> {
+        var agent = Agent.builder().tool(contextTool(context -> {
             executed.add(context.callId());
             return new ToolOutput("result-" + context.callId());
         })).model(request -> {
@@ -87,9 +88,9 @@ class AgentTest {
     void retainsLastRoundAssistantButDoesNotExecuteItsPendingTools() throws Exception {
         var executed = new AtomicInteger();
         var response = calls(call("pending"));
-        var agent = Agent.builder().maxTurns(1).model(request -> response)
+        var agent = Agent.builder().model(request -> response)
                 .tool(contextTool(context -> { executed.incrementAndGet(); return new ToolOutput("done"); })).build();
-        var result = agent.run("question");
+        var result = agent.run("question", TurnOptions.limited(1));
         assertEquals(MAX_TURNS, result.stopReason());
         assertFalse(result.completed());
         assertEquals("", result.text());
@@ -116,9 +117,9 @@ class AgentTest {
     @Test
     void acceptsACompletedAnswerOnTheLastPermittedTurn() throws Exception {
         var turns = new AtomicInteger();
-        var result = Agent.builder().maxTurns(2).model(request -> turns.incrementAndGet() == 1
+        var result = Agent.builder().model(request -> turns.incrementAndGet() == 1
                         ? calls(call("first")) : text("last-turn answer"))
-                .tool(contextTool(context -> new ToolOutput("done"))).build().run("question");
+                .tool(contextTool(context -> new ToolOutput("done"))).build().run("question", TurnOptions.limited(2));
         assertEquals(COMPLETED, result.stopReason());
         assertEquals(2, result.modelCalls());
         assertEquals("last-turn answer", result.text());
@@ -172,10 +173,10 @@ class AgentTest {
     @Test
     void reportsDuplicateCallsBeforeTheLastTurnBudgetLimit() throws Exception {
         var executed = new AtomicInteger();
-        var result = Agent.builder().maxTurns(1)
+        var result = Agent.builder()
                 .model(request -> calls(call("duplicate"), call("duplicate")))
                 .tool(contextTool(context -> { executed.incrementAndGet(); return new ToolOutput("unexpected"); }))
-                .build().run("question");
+                .build().run("question", TurnOptions.limited(1));
         assertEquals(INVALID_TOOL_CALLS, result.stopReason());
         assertEquals(1, result.modelCalls());
         assertEquals(0, executed.get());
@@ -262,7 +263,7 @@ class AgentTest {
         });
         var agent = builder.build();
         tools.clear();
-        builder.systemPrompt("changed").maxTurns(1);
+        builder.systemPrompt("changed");
         var history = new ArrayList<>(List.of(ChatMessage.user("first")));
         var first = agent.run(history);
         history.clear();
@@ -392,6 +393,101 @@ class AgentTest {
         assertFalse(model.closed);
         model.close();
         assertTrue(model.closed);
+    }
+
+    @Test
+    void appliesBudgetsPerTurnAndKeepsSubsequentTurnsIndependent() throws Exception {
+        var agent = Agent.builder().model(request ->
+                request.messages().getLast().role() == ChatMessage.Role.TOOL
+                        ? text("done") : calls(call("same-id")))
+                .tool(contextTool(context -> new ToolOutput("done"))).build();
+
+        var limited = agent.run("first", TurnOptions.limited(1));
+        var completed = agent.run(List.of(ChatMessage.user("second")), TurnOptions.limited(2));
+        var defaulted = agent.run("third");
+
+        assertEquals(MAX_TURNS, limited.stopReason());
+        assertEquals(1, limited.modelCalls());
+        assertTrue(limited.toolResults().isEmpty());
+        assertTrue(completed.completed());
+        assertEquals(2, completed.modelCalls());
+        assertEquals(1, completed.toolResults().size());
+        assertEquals(ChatMessage.user("second"), completed.messages().getFirst());
+        assertTrue(defaulted.completed());
+        assertEquals(2, defaulted.modelCalls());
+    }
+
+    @Test
+    void continuesSixUserTurnsWithIndependentBudgetsAndGrowingHistory() throws Exception {
+        var attempts = new AtomicInteger();
+        var agent = Agent.builder().model(request -> {
+            attempts.incrementAndGet();
+            return request.messages().getLast().role() == ChatMessage.Role.TOOL
+                    ? text("done") : calls(call("call-" + request.messages().size()));
+        }).tool(contextTool(context -> new ToolOutput("done"))).build();
+        List<ChatMessage> history = List.of();
+
+        for (int turn = 1; turn <= 6; turn++) {
+            var input = new ArrayList<>(history);
+            input.add(ChatMessage.user("question-" + turn));
+            var result = agent.run(input, TurnOptions.limited(2));
+
+            assertTrue(result.completed());
+            assertEquals(2, result.modelCalls());
+            assertEquals(1, result.toolResults().size());
+            assertEquals(history, result.messages().subList(0, history.size()));
+            assertEquals(turn * 4, result.messages().size());
+            history = result.messages();
+        }
+        assertEquals(12, attempts.get());
+    }
+
+    @Test
+    void continuesClosedHistoryWithoutCarryingPreviousTurnCountersOrResults() throws Exception {
+        var agent = Agent.builder().model(request ->
+                request.messages().getLast().role() == ChatMessage.Role.TOOL
+                        ? text("done") : calls(call("first-tool")))
+                .tool(contextTool(context -> new ToolOutput("done"))).build();
+        var first = agent.run("first", TurnOptions.limited(2));
+        var continued = new ArrayList<>(first.messages());
+        continued.add(ChatMessage.user("continue"));
+        var second = agent.run(continued, TurnOptions.limited(1));
+
+        // 历史中的调用 ID 仍有效，但当前 turn 的计数和结果从零开始。
+        assertEquals(INVALID_TOOL_CALLS, second.stopReason());
+        assertEquals(1, second.modelCalls());
+        assertTrue(second.toolResults().isEmpty());
+        assertEquals(first.messages(), second.messages().subList(0, first.messages().size()));
+    }
+
+    @Test
+    void unlimitedTurnCanFinishBeyondTheDefaultBudget() throws Exception {
+        var attempts = new AtomicInteger();
+        var agent = Agent.builder().model(request -> {
+            int attempt = attempts.incrementAndGet();
+            return attempt <= 10 ? calls(call("call-" + attempt)) : text("done");
+        }).tool(contextTool(context -> new ToolOutput("done"))).build();
+        var result = agent.run("long task", TurnOptions.unlimited());
+        assertTrue(result.completed());
+        assertEquals(11, result.modelCalls());
+        assertEquals(10, result.toolResults().size());
+    }
+
+    @Test
+    void unlimitedTurnStillHonorsCancellationAndProgressCallbacks() {
+        var attempts = new AtomicInteger();
+        var cancelled = new AtomicBoolean();
+        var progress = new ArrayList<ToolProgress>();
+        var agent = Agent.builder().model(request -> calls(call("call-" + attempts.incrementAndGet())))
+                .tool(contextTool(context -> {
+                    context.reportProgress("running");
+                    if (attempts.get() == 10) cancelled.set(true);
+                    return new ToolOutput("done");
+                })).build();
+        assertThrows(CancellationException.class, () -> agent.run(
+                List.of(ChatMessage.user("long task")), TurnOptions.unlimited(), cancelled::get, progress::add));
+        assertEquals(10, attempts.get());
+        assertEquals(10, progress.size());
     }
 
     private static ChatResponse text(String text) {

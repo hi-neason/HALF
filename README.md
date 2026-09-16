@@ -73,18 +73,25 @@ mvn compile exec:java -Dexec.args="--structured-output"
 `model` 为宿主已经创建的任一 `ChatModel` 实现：
 
 ```java
+import io.github.hi.neason.half.agent.state.TurnOptions;
+
 var agent = Agent.builder()
         .model(model)
         .systemPrompt("使用工具完成计算，再给出答案。")
         .tool(new AddTool())
-        .maxTurns(4)
         .build();
-var result = agent.run("2 加 3 等于多少？");
-if (result.completed()) System.out.println(result.text());
-else System.out.println(result.stopReason());
+var result = agent.run("2 加 3 等于多少？", TurnOptions.limited(4));
+if(result.
+
+completed())System.out.
+
+println(result.text());
+        else System.out.
+
+println(result.stopReason());
 ```
 
-每次 `run` 使用独立历史。Agent 自动记录模型消息、执行工具并回填结果，再发起下一次模型请求；达到轮次上限时停止。模型和工具的关闭由宿主负责。可通过 `agent.stream(input)` 订阅模型增量、工具进度和最终结果，详细约定见 [Agent 门面与循环](docs/agent.md)。
+每次 `run` 或流式订阅代表一个独立 turn，可包含多次模型请求。Agent 自动记录模型消息、执行工具并回填结果，再发起下一次请求。`TurnOptions` 配置本次 turn 的请求预算，省略时默认 8 次；显式 `unlimited()` 可用于单次长链任务。长期会话通过传入历史延续，每个 turn 独立计数。模型和工具的关闭由宿主负责。可通过 `agent.stream(input)` 订阅模型增量、工具进度和最终结果，详细约定见 [Agent 门面与循环](docs/agent.md)。
 
 离线体验完整闭环（假模型与真实 Java 工具）：
 

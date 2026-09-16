@@ -1,6 +1,7 @@
 package io.github.hi.neason.half.agent;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hi.neason.half.agent.state.TurnOptions;
 import io.github.hi.neason.half.model.*;
 import io.github.hi.neason.half.tool.*;
 import org.junit.jupiter.api.Test;
@@ -194,10 +195,10 @@ class AgentStreamTest {
         for (boolean budget : List.of(false, true)) {
             var executed = new AtomicInteger();
             var response = budget ? calls(call("one")) : calls(call("one"), call("one"));
-            var probe = subscribe(Agent.builder().maxTurns(budget ? 1 : 3)
+            var probe = subscribe(Agent.builder()
                     .model(model(request -> events(List.of(new ModelEvent.Completed(response)), null)))
                     .tool(tool(context -> { executed.incrementAndGet(); return new ToolOutput("unexpected"); }))
-                    .build().stream("question"));
+                    .build().stream("question", TurnOptions.limited(budget ? 1 : 3)));
             probe.subscription.request(Long.MAX_VALUE);
             assertNull(probe.terminal.get(5, TimeUnit.SECONDS));
             assertEquals(budget ? MAX_TURNS : INVALID_TOOL_CALLS, probe.result().stopReason());
@@ -277,6 +278,54 @@ class AgentStreamTest {
         invalid.subscription.request(Long.MAX_VALUE);
         assertInstanceOf(IllegalArgumentException.class, invalid.terminal.get(5, TimeUnit.SECONDS));
         assertTrue(requests.isEmpty());
+    }
+
+    @Test
+    void sharesTurnOptionsButIsolatesStateBetweenSubscriptions() throws Exception {
+        var calls = new AtomicInteger();
+        var agent = Agent.builder().model(model(request -> {
+            calls.incrementAndGet();
+            var response = request.messages().getLast().role() == ChatMessage.Role.TOOL
+                    ? text("done") : calls(call("same-id"));
+            return events(List.of(new ModelEvent.Completed(response)), null);
+        })).tool(tool(context -> new ToolOutput("done"))).build();
+        var publisher = agent.stream(List.of(ChatMessage.user("question")), TurnOptions.limited(2));
+        var first = subscribe(publisher);
+        var second = subscribe(publisher);
+        first.subscription.request(Long.MAX_VALUE);
+        second.subscription.request(Long.MAX_VALUE);
+        assertNull(first.terminal.get(5, TimeUnit.SECONDS));
+        assertNull(second.terminal.get(5, TimeUnit.SECONDS));
+        assertTrue(first.result().completed());
+        assertTrue(second.result().completed());
+        assertEquals(2, first.result().modelCalls());
+        assertEquals(2, second.result().modelCalls());
+        assertEquals(1, first.result().toolResults().size());
+        assertEquals(first.result().messages(), second.result().messages());
+        assertEquals(4, calls.get());
+
+        var limited = subscribe(agent.stream("another question", TurnOptions.limited(1)));
+        limited.subscription.request(Long.MAX_VALUE);
+        assertNull(limited.terminal.get(5, TimeUnit.SECONDS));
+        assertEquals(MAX_TURNS, limited.result().stopReason());
+        assertEquals(1, limited.result().modelCalls());
+        assertTrue(limited.result().toolResults().isEmpty());
+    }
+
+    @Test
+    void streamsUnlimitedTurnBeyondTheDefaultBudget() throws Exception {
+        var attempts = new AtomicInteger();
+        var agent = Agent.builder().model(model(request -> {
+            int attempt = attempts.incrementAndGet();
+            var response = attempt <= 10 ? calls(call("call-" + attempt)) : text("done");
+            return events(List.of(new ModelEvent.Completed(response)), null);
+        })).tool(tool(context -> new ToolOutput("done"))).build();
+        var probe = subscribe(agent.stream("long task", TurnOptions.unlimited()));
+        probe.subscription.request(Long.MAX_VALUE);
+        assertNull(probe.terminal.get(5, TimeUnit.SECONDS));
+        assertTrue(probe.result().completed());
+        assertEquals(11, probe.result().modelCalls());
+        assertEquals(10, probe.result().toolResults().size());
     }
 
     private static Probe subscribe(Flow.Publisher<AgentEvent> publisher) {

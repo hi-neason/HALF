@@ -7,7 +7,10 @@ import io.github.hi.neason.half.tool.ToolResult;
 
 import java.util.Objects;
 
-/** 单次 Agent 运行的事件；turn 从 1 开始，Completed 表示循环已停止，是否成功由 result 判断。 */
+/**
+ * 单次用户 turn 的运行事件；Completed 表示整个 turn 已停止，是否成功由 result 判断。
+ * 为兼容现有订阅者，TurnStarted 及各事件的 turn 字段仍沿用原名，表示从 1 开始的模型请求步骤编号。
+ */
 public sealed interface AgentEvent {
     record TurnStarted(int turn) implements AgentEvent {
         public TurnStarted { requireTurn(turn); }

@@ -21,7 +21,6 @@ try (var mcp = McpClient.stdio(serverCommand)
     var agent = Agent.builder()
             .model(model)
             .tools(mcp.tools("local"))
-            .maxTurns(8)
             .build();
 
     var result = agent.run("使用可用工具完成任务");

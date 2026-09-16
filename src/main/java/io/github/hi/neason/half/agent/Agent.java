@@ -1,5 +1,6 @@
 package io.github.hi.neason.half.agent;
 
+import io.github.hi.neason.half.agent.state.TurnOptions;
 import io.github.hi.neason.half.model.ChatMessage;
 import io.github.hi.neason.half.model.ChatModel;
 import io.github.hi.neason.half.model.ModelOptions;
@@ -14,14 +15,14 @@ import java.util.concurrent.Flow;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
-/** 构建与运行 Agent 的门面；每次 run 独立维护历史，模型和工具的生命周期归宿主所有。 */
+/** 构建与运行 Agent 的门面；每次 run / 流订阅是一个独立 turn，预算由 TurnOptions 指定；模型和工具的生命周期归宿主所有。 */
 public final class Agent {
     private final AgentLoop loop;
     private final String systemPrompt;
 
     private Agent(Builder builder) {
         var tools = new ToolRegistry(builder.tools);
-        loop = new AgentLoop(builder.model, tools, builder.maxTurns, builder.maxOutputTokens,
+        loop = new AgentLoop(builder.model, tools, builder.maxOutputTokens,
                 builder.modelOptions, builder.maxToolOutputCharacters);
         systemPrompt = builder.systemPrompt;
     }
@@ -41,10 +42,30 @@ public final class Agent {
         return run(List.of(ChatMessage.user(input)), cancelled, onProgress);
     }
 
+    public AgentResult run(String input, TurnOptions options) throws InterruptedException {
+        return run(List.of(ChatMessage.user(input)), options);
+    }
+
+    public AgentResult run(List<ChatMessage> history, TurnOptions options) throws InterruptedException {
+        return run(history, options, () -> false, ignored -> { });
+    }
+
+    public AgentResult run(String input, TurnOptions options, BooleanSupplier cancelled,
+                           Consumer<ToolProgress> onProgress) throws InterruptedException {
+        return run(List.of(ChatMessage.user(input)), options, cancelled, onProgress);
+    }
+
     /** history 必须已完成所有工具调用/结果配对；本方法不会执行历史中的工具。 */
     public AgentResult run(List<ChatMessage> history, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress)
             throws InterruptedException {
-        return loop.run(prepareHistory(history), Objects.requireNonNull(cancelled, "cancelled"),
+        return run(history, TurnOptions.defaults(), cancelled, onProgress);
+    }
+
+    /** 本次 turn 使用独立预算；历史中的模型调用与工具结果不计入本次执行统计。 */
+    public AgentResult run(List<ChatMessage> history, TurnOptions options, BooleanSupplier cancelled,
+                           Consumer<ToolProgress> onProgress) throws InterruptedException {
+        return loop.run(prepareHistory(history), Objects.requireNonNull(options, "options"),
+                Objects.requireNonNull(cancelled, "cancelled"),
                 Objects.requireNonNull(onProgress, "onProgress"));
     }
 
@@ -55,8 +76,18 @@ public final class Agent {
 
     /** 输入在调用时复制；每次订阅都可能再次执行工具副作用，不自动共享或重放。 */
     public Flow.Publisher<AgentEvent> stream(List<ChatMessage> history) {
+        return stream(history, TurnOptions.defaults());
+    }
+
+    public Flow.Publisher<AgentEvent> stream(String input, TurnOptions options) {
+        return stream(List.of(ChatMessage.user(input)), options);
+    }
+
+    /** 每次订阅新建 turn 状态并重置预算；不可变 options 可在订阅之间安全复用。 */
+    public Flow.Publisher<AgentEvent> stream(List<ChatMessage> history, TurnOptions options) {
         var messages = prepareHistory(history);
-        return new AgentStream((cancelled, events) -> loop.stream(messages, cancelled, events));
+        Objects.requireNonNull(options, "options");
+        return new AgentStream((cancelled, events) -> loop.stream(messages, options, cancelled, events));
     }
 
     private List<ChatMessage> prepareHistory(List<ChatMessage> history) {
@@ -73,7 +104,6 @@ public final class Agent {
         private ChatModel model;
         private final List<Tool> tools = new ArrayList<>();
         private String systemPrompt;
-        private int maxTurns = 8;
         private Integer maxOutputTokens;
         private ModelOptions modelOptions = ModelOptions.defaults();
         private int maxToolOutputCharacters = 16_000;
@@ -99,13 +129,6 @@ public final class Agent {
         public Builder systemPrompt(String prompt) {
             if (prompt == null || prompt.isBlank()) throw new IllegalArgumentException("systemPrompt must not be blank");
             systemPrompt = prompt;
-            return this;
-        }
-
-        /** 模型调用次数上限，包含第一次请求以及失败的请求尝试。 */
-        public Builder maxTurns(int maxTurns) {
-            if (maxTurns <= 0) throw new IllegalArgumentException("maxTurns must be positive");
-            this.maxTurns = maxTurns;
             return this;
         }
 

@@ -2,6 +2,7 @@ package io.github.hi.neason.half.examples;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hi.neason.half.agent.Agent;
+import io.github.hi.neason.half.agent.state.TurnOptions;
 import io.github.hi.neason.half.model.ChatMessage;
 import io.github.hi.neason.half.model.ChatModel;
 import io.github.hi.neason.half.model.ChatResponse;
@@ -29,9 +30,8 @@ public final class AgentExample {
                 .model(model)
                 .systemPrompt("使用工具完成计算，再给出答案。")
                 .tool(new AddTool())
-                .maxTurns(3)
                 .build();
-        var result = agent.run("2 加 3 等于多少？");
+        var result = agent.run("2 加 3 等于多少？", TurnOptions.limited(3));
         if (!result.completed()) throw new IllegalStateException("Example stopped: " + result.stopReason());
         System.out.println(result.text());
         System.out.println("Model calls: " + result.modelCalls());

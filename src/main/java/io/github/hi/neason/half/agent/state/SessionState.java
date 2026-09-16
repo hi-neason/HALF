@@ -1,34 +1,38 @@
-package io.github.hi.neason.half.agent;
+package io.github.hi.neason.half.agent.state;
 
 import io.github.hi.neason.half.model.ChatMessage;
-import io.github.hi.neason.half.model.ChatResponse;
 import io.github.hi.neason.half.model.ContentBlock;
-import io.github.hi.neason.half.tool.ToolResult;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
+import java.util.Objects;
 import java.util.Set;
 
 /**
- * 单次 Agent 运行独享的状态，由 AgentLoop 创建和更新，不跨运行共享。
- * 负责初始历史校验与结果快照；模型调用、工具执行和停止策略由 AgentLoop 管理。
+ * 会话历史及其工具调用 ID 索引，与单次 turn 的预算和结果分离。
+ * 从宿主传入的历史复制创建；延续会话时，宿主传回已完成 turn 的历史。
+ * 不作为 Agent 的共享字段，避免并发调用和多次订阅互相修改历史。
  */
-final class LoopState {
-    final List<ChatMessage> messages;
-    final Set<String> seenCallIds;
-    final List<ToolResult> toolResults = new ArrayList<>();
-    ChatResponse response;
-    int modelCalls;
+public final class SessionState {
+    private final List<ChatMessage> messages;
+    private final Set<String> seenCallIds;
 
-    LoopState(List<ChatMessage> history) {
+    public SessionState(List<ChatMessage> history) {
         messages = new ArrayList<>(history);
         seenCallIds = validateHistory(messages);
     }
 
-    AgentResult result(AgentResult.StopReason reason, Optional<AgentResult.ModelFailure> failure) {
-        return new AgentResult(reason, modelCalls, messages, toolResults, Optional.ofNullable(response), failure);
+    /** 返回当前历史的不可变快照。 */
+    public List<ChatMessage> messages() { return List.copyOf(messages); }
+
+    public void appendMessage(ChatMessage message) {
+        messages.add(Objects.requireNonNull(message, "message"));
+    }
+
+    /** 注册新调用 ID；重复时返回 false，供循环在执行工具前拒绝本批调用。 */
+    public boolean registerCallId(String callId) {
+        return seenCallIds.add(Objects.requireNonNull(callId, "callId"));
     }
 
     private static Set<String> validateHistory(List<ChatMessage> messages) {

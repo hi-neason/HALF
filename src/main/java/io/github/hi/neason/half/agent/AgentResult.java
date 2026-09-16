@@ -13,6 +13,7 @@ import java.util.OptionalInt;
 public record AgentResult(StopReason stopReason, int modelCalls, List<ChatMessage> messages,
                           List<ToolResult> toolResults, Optional<ChatResponse> lastResponse,
                           Optional<ModelFailure> modelFailure) {
+    /** MAX_TURNS 沿用原名，表示本次用户 turn 的模型请求预算耗尽，不限制 Agent 或会话寿命。 */
     public enum StopReason { COMPLETED, MAX_TURNS, MODEL_ERROR, INCOMPLETE_RESPONSE, INVALID_TOOL_CALLS }
 
     /** 仅保留异常类别与可选 HTTP 状态，不携带响应正文、密钥或异常链。 */

@@ -6,6 +6,7 @@
 
 ```java
 import io.github.hi.neason.half.agent.Agent;
+import io.github.hi.neason.half.agent.state.TurnOptions;
 import io.github.hi.neason.half.examples.AddTool;
 
 // model 为宿主已创建的 ChatModel，例如现有的三种协议适配器。
@@ -13,16 +14,21 @@ var agent = Agent.builder()
         .model(model)
         .systemPrompt("使用工具完成计算，再给出答案。")
         .tool(new AddTool())
-        .maxTurns(4)
         .maxOutputTokens(1024)
         .build();
 
-var result = agent.run("2 加 3 等于多少？");
-if (result.completed()) {
-    System.out.println(result.text());
-} else {
-    System.out.println(result.stopReason());
-}
+        var result = agent.run("2 加 3 等于多少？", TurnOptions.limited(4));
+if(result.
+
+        completed()){
+        System.out.
+
+        println(result.text());
+        }else{
+        System.out.
+
+        println(result.stopReason());
+        }
 ```
 
 `model` 必须配置；工具可以省略，或通过 `tool(tool)` / `tools(list)` 追加。构建时检查重复工具名并保存配置快照，之后修改 builder 不影响已经构建的 Agent。
@@ -30,7 +36,6 @@ if (result.completed()) {
 | 配置 | 默认值 | 含义 |
 | --- | --- | --- |
 | `systemPrompt` | 无 | 前置系统消息，首条已经相同时不重复添加 |
-| `maxTurns` | 8 | 一次 run 最多发起的模型调用次数，必须为正 |
 | `maxOutputTokens` | 未配置 | 每次模型请求的输出预算，沿用模型适配器默认值 |
 | `modelOptions` | `ModelOptions.defaults()` | 每次请求使用的模型选项 |
 | `maxToolOutputCharacters` | 16,000 | 单次工具文本及进度的 UTF-16 字符预算，最小为 64 |
@@ -56,14 +61,26 @@ Agent 不关闭传入的模型或工具，生命周期由宿主管理。Agent �
 
 同步 `run` 使用 `ChatModel.chat()`；`stream` 使用 `ChatModel.stream()` 并实时交付模型事件。两种入口共用结束原因、工具校验、消息回填和轮次预算规则。工具执行必须等到完整模型响应以及模型流的 `onComplete`，不会在参数分片到达时提前执行。
 
-## 轮次上限与停止原因
+## Turn 预算与停止原因
 
-`maxTurns` 计算模型调用尝试次数，包括抛出 IOException 的请求。预算检查发生在请求之前；最后一次允许的模型响应若包含工具调用，记录响应后直接停止，不执行无法再交回模型处理的工具。例如 `maxTurns(1)` 可以完成一次直接回答，但不会执行模型提出的工具。
+一个 turn 是一次 `run` 或一次 `stream` 订阅，可以包含多次模型请求。请求预算由调用时的 `TurnOptions` 决定，不属于 Agent 配置，也不限制整个会话的生命周期：
+
+| 配置 | 含义 |
+| --- | --- |
+| `TurnOptions.defaults()` | 本次 turn 最多请求模型 8 次；省略 options 的重载采用此值 |
+| `TurnOptions.limited(maxModelCalls)` | 本次 turn 的模型请求次数上限，必须为正 |
+| `TurnOptions.unlimited()` | 本次 turn 不设模型请求次数上限 |
+
+同步与流式入口均支持字符串或历史列表加 `TurnOptions`，例如 `agent.run(input, TurnOptions.limited(4))`、`agent.stream(history, TurnOptions.unlimited())`。每次运行独立计数，同一个流的不同订阅也各自拥有完整预算。
+
+计数包含抛出 IOException 的模型请求尝试。收到完整响应后，先判断响应完整性、是否正常完成及工具调用 ID，再判断是否还有后续请求预算。最后一次允许的响应若包含工具调用，记录响应后停止，不执行无法再交回模型处理的工具。例如 `TurnOptions.limited(1)` 可以完成一次直接回答，但不会执行模型提出的工具。
+
+上限不是必须完成的请求次数：模型在第二次请求正常结束且不再提出工具时，即使预算还有余量，也立即返回。`unlimited()` 只取消次数上限，正常完成、取消、模型错误和非法响应仍按既有规则停止。
 
 | `stopReason` | 含义 |
 | --- | --- |
 | `COMPLETED` | 模型正常结束，且没有工具调用 |
-| `MAX_TURNS` | 最后一轮仍提出工具，预算已经耗尽 |
+| `MAX_TURNS` | 当前 turn 仍需调用工具，但模型请求预算已耗尽；枚举名称保留兼容 |
 | `MODEL_ERROR` | 模型调用产生 IOException，包括 HTTP、协议或传输错误 |
 | `INCOMPLETE_RESPONSE` | 不完整、未知或与工具内容不一致的模型结束原因 |
 | `INVALID_TOOL_CALLS` | 模型调用 ID 在本批、输入历史或前面轮次中重复 |
@@ -71,6 +88,26 @@ Agent 不关闭传入的模型或工具，生命周期由宿主管理。Agent �
 当前完整性规则对应现有模型契约：无工具时接受 `stop`、`end_turn`、`completed`；有工具时接受 `tool_calls`、`tool_use`、`completed`。`length`、`max_tokens`、`pause_turn` 及其他未支持结束原因均停止，不继续执行工具。适配器仍保留原始 `finishReason`，新协议需要明确其循环语义后再扩展这一规则。
 
 `COMPLETED` 表示循环正常结束，不保证答案正确或没有拒绝内容；调用方可以检查 `lastResponse()` 中的完整内容。
+
+## 状态与会话延续
+
+内部状态按职责拆分：
+
+- `SessionState` 保存消息历史、已出现的工具调用 ID，并校验输入历史配对。
+- `TurnState` 保存本次 turn 的选项、工具结果、最后模型响应及模型请求计数。
+
+这两个状态在每次运行时独立创建；`SessionState` 目前并不是 Agent 内持久保存的会话对象。长期会话由宿主持有已完成结果的历史，再追加新用户消息传回，预算在新的 turn 重新计算：
+
+```java
+var first = agent.run("先完成第一个任务", TurnOptions.limited(4));
+if (first.completed()) {
+    var history = new java.util.ArrayList<>(first.messages());
+    history.add(io.github.hi.neason.half.model.ChatMessage.user("继续第二个任务"));
+    var second = agent.run(history, TurnOptions.limited(6));
+}
+```
+
+如果一次用户任务本身需要长链执行，可显式使用 `TurnOptions.unlimited()`。这里没有新增自动会话管理、持久化或中断恢复能力。
 
 ## 结果与历史
 
@@ -88,7 +125,7 @@ Agent 不关闭传入的模型或工具，生命周期由宿主管理。Agent �
 
 ```java
 var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
-var result = agent.run("执行任务", cancelled::get,
+var result = agent.run("执行任务", TurnOptions.limited(12), cancelled::get,
         progress -> System.out.println(progress.callId() + ": " + progress.message()));
 ```
 
@@ -147,14 +184,16 @@ finished.join(); // 示例主线程等待；UI 或服务端可异步处理 finis
 
 | 事件 | 含义 |
 | --- | --- |
-| `TurnStarted(turn)` | 即将开始第 turn 次模型请求，从 1 计数 |
+| `TurnStarted(turn)` | 即将开始本次运行的第 turn 次模型请求，从 1 计数 |
 | `Model(turn, event)` | 原样保留文本、推理、工具参数、用量等所有 ModelEvent |
 | `ToolStarted(turn, call)` | 调用通过循环预检，即将交给工具执行器；仍可能返回未知工具或参数错误 |
 | `ToolProgressed(turn, progress)` | 工具执行中的进度，不回填给模型 |
 | `ToolCompleted(turn, result)` | 工具返回结果且已经追加到历史，包含成功或错误状态 |
 | `Completed(result)` | 整个循环已停止，随后发出 Flow `onComplete` |
 
-`ModelEvent.Completed` 只代表单轮模型响应；`AgentEvent.Completed` 才携带整个运行的结果。后者也可能包含 `MAX_TURNS` 或 `MODEL_ERROR`，应检查 `result.completed()`，不能把 Flow 的正常结束直接当作任务成功。部分文本已经交付后仍可能失败，展示层应根据最终结果标明状态。
+事件中的 `turn` 字段沿用既有名称，表示本次运行中的模型请求序号，不是会话的用户任务序号。
+
+`ModelEvent.Completed` 只代表单次模型响应；`AgentEvent.Completed` 才携带整个运行的结果。后者也可能包含 `MAX_TURNS` 或 `MODEL_ERROR`，应检查 `result.completed()`，不能把 Flow 的正常结束直接当作任务成功。部分文本已经交付后仍可能失败，展示层应根据最终结果标明状态。
 
 每次订阅独立运行，第一次正数 `request(n)` 后启动一个虚拟线程；订阅本身不会调用模型。输入列表在 `stream(history)` 时复制，历史配对在运行开始时校验。重复订阅可能再次执行工具副作用，不能把它当成同一次运行的回放。
 
