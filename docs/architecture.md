@@ -71,6 +71,6 @@ JDK 标准库优先；JSON 编解码、HTTP 传输等基础能力可以按需使
 
 ## MCP 接入边界
 
-`mcp` 包作为 MCP `2025-11-25` stdio Client，以原生 Java 子进程和 JSON-RPC 连接 Server。`McpConnection` 管理消息关联、传输、取消和关闭，`McpClient` 管理握手、能力检查、分页工具发现与调用。远端工具通过 `ContextualTool` 适配到现有注册表，AgentLoop 无需依赖 MCP 协议。
+`mcp` 包通过 stdio、传统 HTTP+SSE 或 Streamable HTTP 连接 Server。`McpTransport` 约束消息收发，`StdioMcpTransport` 管理子进程，`McpHttpTransport` 管理 HTTP、SSE 和会话头；`McpConnection` 统一管理 JSON-RPC 关联、进度、请求取消和反向 ping，`McpClient` 管理握手、能力检查、分页工具发现与调用。远端工具通过 `ContextualTool` 适配到现有注册表，AgentLoop 无需依赖 MCP 协议。
 
 宿主负责配置与关闭 Client，并通过 `Agent.builder().tools(client.tools(namespace))` 显式注册发现的工具。MCP `isError` 通过 `ToolOutput.isError` 转为失败结果，文本交给模型，原始内容与结构化结果保存在宿主详情。版本和未实现范围见 [MCP 工具客户端](mcp.md)。

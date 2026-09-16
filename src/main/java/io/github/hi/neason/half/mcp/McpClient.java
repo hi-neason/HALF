@@ -10,6 +10,7 @@ import io.github.hi.neason.half.tool.ToolContext;
 import io.github.hi.neason.half.tool.ToolOutput;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -22,22 +23,30 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** 宿主持有的 stdio MCP Client；负责协议与工具适配，不持有或推进 Agent 会话。 */
+/** 宿主持有的 MCP Client；传输与工具适配解耦，不持有或推进 Agent 会话。 */
 public final class McpClient implements AutoCloseable {
     public static final String PROTOCOL_VERSION = "2025-11-25";
     private final McpConnection connection;
     private final ObjectNode serverInfo;
     private final ObjectNode capabilities;
+    private final String protocolVersion;
 
-    private McpClient(McpConnection connection, ObjectNode serverInfo, ObjectNode capabilities) {
+    private McpClient(McpConnection connection, ObjectNode serverInfo, ObjectNode capabilities, String protocolVersion) {
         this.connection = connection;
         this.serverInfo = serverInfo.deepCopy();
         this.capabilities = capabilities.deepCopy();
+        this.protocolVersion = protocolVersion;
     }
 
     public static Builder stdio(List<String> command) { return new Builder(command); }
 
     public static Builder stdio(String... command) { return stdio(List.of(command)); }
+
+    public static HttpBuilder sse(URI endpoint) { return new HttpBuilder(endpoint, true); }
+
+    public static HttpBuilder streamableHttp(URI endpoint) { return new HttpBuilder(endpoint, false); }
+
+    public String protocolVersion() { return protocolVersion; }
 
     public ObjectNode serverInfo() { return serverInfo.deepCopy(); }
 
@@ -142,6 +151,71 @@ public final class McpClient implements AutoCloseable {
     private static ObjectNode object() { return JsonNodeFactory.instance.objectNode(); }
     private static McpException protocol(String message) { return new McpException(message); }
 
+    private static McpClient initialize(McpConnection connection, boolean legacySse)
+            throws IOException, InterruptedException {
+        try {
+            var params = object().put("protocolVersion", PROTOCOL_VERSION);
+            params.set("capabilities", object());
+            params.set("clientInfo", object().put("name", "half").put("version", "0.1.0"));
+            var result = connection.request("initialize", params, null);
+            String version = result.path("protocolVersion").asText();
+            if (!result.isObject() || !(PROTOCOL_VERSION.equals(version)
+                    || legacySse && "2024-11-05".equals(version))) {
+                throw protocol("Unsupported MCP protocol version");
+            }
+            if (!(result.get("serverInfo") instanceof ObjectNode info)
+                    || !info.path("name").isTextual() || !info.path("version").isTextual()
+                    || !(result.get("capabilities") instanceof ObjectNode capabilities)
+                    || capabilities.has("tools") && !capabilities.get("tools").isObject()) {
+                throw protocol("Invalid MCP initialize result");
+            }
+            connection.protocolVersion(version);
+            connection.notify("notifications/initialized", object());
+            connection.initialized();
+            return new McpClient(connection, info, capabilities, version);
+        } catch (IOException | InterruptedException | RuntimeException | Error error) {
+            connection.close();
+            throw error;
+        }
+    }
+
+    private static Duration checkedTimeout(Duration timeout) {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isZero() || timeout.isNegative() || timeout.compareTo(Duration.ofDays(1)) > 0) {
+            throw new IllegalArgumentException("timeout must be positive and at most one day");
+        }
+        return timeout;
+    }
+
+    /** HTTP 认证由宿主提供请求头；不自动 OAuth、重连或降级到另一传输。 */
+    public static final class HttpBuilder {
+        private final URI endpoint;
+        private final boolean legacySse;
+        private Map<String, String> headers = Map.of();
+        private Duration timeout = Duration.ofSeconds(30);
+
+        private HttpBuilder(URI endpoint, boolean legacySse) {
+            this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
+            this.legacySse = legacySse;
+        }
+
+        public HttpBuilder headers(Map<String, String> headers) {
+            this.headers = Map.copyOf(headers);
+            return this;
+        }
+
+        public HttpBuilder timeout(Duration timeout) {
+            this.timeout = checkedTimeout(timeout);
+            return this;
+        }
+
+        public McpClient connect() throws IOException, InterruptedException {
+            if (Thread.interrupted()) throw new InterruptedException("MCP connection interrupted");
+            var transport = new McpHttpTransport(endpoint, headers, timeout, legacySse);
+            return initialize(new McpConnection(transport, timeout), legacySse);
+        }
+    }
+
     public static final class Builder {
         private final List<String> command;
         private Path directory;
@@ -168,37 +242,14 @@ public final class McpClient implements AutoCloseable {
 
         /** 单个请求的总时限；工具进度不会延长它。 */
         public Builder timeout(Duration timeout) {
-            Objects.requireNonNull(timeout, "timeout");
-            if (timeout.isZero() || timeout.isNegative() || timeout.compareTo(Duration.ofDays(1)) > 0) {
-                throw new IllegalArgumentException("timeout must be positive and at most one day");
-            }
-            this.timeout = timeout;
+            this.timeout = checkedTimeout(timeout);
             return this;
         }
 
         public McpClient connect() throws IOException, InterruptedException {
             if (Thread.interrupted()) throw new InterruptedException("MCP connection interrupted");
             var connection = new McpConnection(command, directory, environment, timeout);
-            try {
-                var params = object().put("protocolVersion", PROTOCOL_VERSION);
-                params.set("capabilities", object());
-                params.set("clientInfo", object().put("name", "half").put("version", "0.1.0"));
-                var result = connection.request("initialize", params, null);
-                if (!result.isObject() || !PROTOCOL_VERSION.equals(result.path("protocolVersion").asText())) {
-                    throw protocol("Unsupported MCP protocol version");
-                }
-                if (!(result.get("serverInfo") instanceof ObjectNode info)
-                        || !info.path("name").isTextual() || !info.path("version").isTextual()
-                        || !(result.get("capabilities") instanceof ObjectNode capabilities)
-                        || capabilities.has("tools") && !capabilities.get("tools").isObject()) {
-                    throw protocol("Invalid MCP initialize result");
-                }
-                connection.notify("notifications/initialized", object());
-                return new McpClient(connection, info, capabilities);
-            } catch (IOException | InterruptedException | RuntimeException | Error error) {
-                connection.close();
-                throw error;
-            }
+            return initialize(connection, false);
         }
     }
 }

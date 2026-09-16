@@ -21,7 +21,7 @@ HALF 是一个计划使用 Java 开发的轻量级 harness agent 框架，负责
 
 当前支持文本/图片/文件输入、拒绝和推理内容、结构化输出配置、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具模块已支持显式注册、参数解析、顺序执行、调用上下文与进度、错误分类、宿主结果详情及输出裁剪；已提供共用循环规则的同步／流式 AgentLoop、`Flow.Publisher<AgentEvent>` 和 `Agent.builder()` 门面。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
 
-MCP 已提供原生 Java `2025-11-25` stdio 工具客户端，可发现 Server 工具并接入同步／流式 Agent；接入方式和版本边界见 [MCP 工具客户端](docs/mcp.md)。
+MCP 已提供原生 Java stdio、HTTP+SSE 和 Streamable HTTP 工具客户端，可发现 Server 工具并接入同步／流式 Agent；接入方式和版本边界见 [MCP 工具客户端](docs/mcp.md)。
 
 另外提供官方 JSON/SSE 客户端及 Responses、Chat Completions 的资源查询、删除等配套端点，完整覆盖清单和限制见 [官方协议覆盖](docs/official-api.md)。
 
@@ -96,7 +96,7 @@ mvn compile exec:java -Dexec.mainClass=io.github.hi.neason.half.examples.AgentEx
 
 核心目标是打通“输入 → 模型响应 → 工具调用 → 结果回填 → 再次推理 → 结束”的执行循环，并提供明确的停止条件和运行结果。
 
-初期聚焦单 Agent、单会话的最小闭环。模型供应商接入、工具执行、Agent 循环和 MCP stdio 工具接入已实现；持久化、MCP 远程 HTTP 传输、多 Agent 协作和用户界面继续按需求扩展。
+初期聚焦单 Agent、单会话的最小闭环。模型供应商接入、工具执行、Agent 循环和 MCP 工具接入已实现；持久化、多 Agent 协作和用户界面继续按需求扩展。
 
 ## 开发顺序
 
@@ -104,7 +104,7 @@ mvn compile exec:java -Dexec.mainClass=io.github.hi.neason.half.examples.AgentEx
 2. 扩展多协议及流式响应，理解统一模型抽象（已实现当前三种协议）。
 3. 实现工具注册、参数校验与执行，连接调用和结果（已实现）。
 4. 构建同步／流式 Agent 循环与门面，提供轮次上限、明确停止原因、事件订阅及取消（已实现）。
-5. 实现 MCP 工具客户端（已实现 `2025-11-25` stdio）。
+5. 实现 MCP 工具客户端（已实现 stdio、传统 HTTP+SSE 与 Streamable HTTP，版本范围见 MCP 文档）。
 6. 根据学习需求扩展上下文管理、会话持久化和多 Agent 协作。
 
 ## 文档

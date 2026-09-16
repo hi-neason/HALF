@@ -1,25 +1,14 @@
 package io.github.hi.neason.half.mcp;
 
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hi.neason.half.tool.ToolContext;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -29,40 +18,33 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** 单个 stdio 会话。读取线程只做路由，进度回调在请求调用线程执行。 */
+/** 跨传输共享的 JSON-RPC 会话；调用线程执行进度回调，传输线程只路由消息。 */
 final class McpConnection implements AutoCloseable {
-    private static final int MAX_MESSAGE_BYTES = 1024 * 1024;
-    private static final ObjectMapper JSON = new ObjectMapper()
-            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-    private final Process process;
+    private final McpTransport transport;
     private final long timeoutNanos;
     private final AtomicLong nextId = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ConcurrentHashMap<String, Pending> pending = new ConcurrentHashMap<>();
-    private final ArrayBlockingQueue<Outbound> writes = new ArrayBlockingQueue<>(64);
-    private final Thread writer;
-    private final AtomicReference<Outbound> activeWrite = new AtomicReference<>();
 
-    McpConnection(List<String> command, Path directory, Map<String, String> environment,
-                  Duration timeout) throws IOException {
-        Objects.requireNonNull(timeout, "timeout");
-        timeoutNanos = timeout.toNanos();
-        if (timeoutNanos <= 0) throw new IllegalArgumentException("timeout must be positive");
-        var builder = new ProcessBuilder(List.copyOf(command));
-        if (directory != null) builder.directory(directory.toFile());
-        builder.environment().putAll(Map.copyOf(environment));
-        builder.redirectError(ProcessBuilder.Redirect.DISCARD);
-        try {
-            process = builder.start();
-        } catch (IOException error) {
-            throw new McpException("Unable to start MCP server");
-        }
-        writer = Thread.ofVirtual().name("half-mcp-writer").unstarted(this::writeLoop);
-        writer.start();
-        Thread.ofVirtual().name("half-mcp-write-deadline").start(this::watchWrites);
-        Thread.ofVirtual().name("half-mcp-reader").start(this::readLoop);
+    McpConnection(List<String> command, Path directory, Map<String, String> environment, Duration timeout)
+            throws IOException, InterruptedException {
+        this(new StdioMcpTransport(command, directory, environment, timeout), timeout);
     }
+
+    McpConnection(McpTransport transport, Duration timeout) throws IOException, InterruptedException {
+        this.transport = transport;
+        timeoutNanos = timeout.toNanos();
+        try {
+            transport.start(this::receive, this::failed);
+            if (closed.get()) throw new McpException("MCP connection failed during startup");
+        } catch (IOException | InterruptedException | RuntimeException | Error error) {
+            close();
+            throw error;
+        }
+    }
+
+    void protocolVersion(String version) { transport.protocolVersion(version); }
+    void initialized() { transport.initialized(); }
 
     JsonNode request(String method, ObjectNode params, ToolContext context)
             throws IOException, InterruptedException {
@@ -71,7 +53,7 @@ final class McpConnection implements AutoCloseable {
         long started = System.nanoTime();
         var call = new Pending();
         pending.put(id, call);
-        Outbound outbound = null;
+        CompletableFuture<Void> outbound = null;
         try {
             var message = message(method, params);
             message.put("id", id);
@@ -79,25 +61,26 @@ final class McpConnection implements AutoCloseable {
                 ObjectNode arguments = (ObjectNode) message.get("params");
                 arguments.withObject("_meta").put("progressToken", id);
             }
-            outbound = enqueue(message, started);
-            await(outbound.written(), started, context, call);
+            outbound = send(message);
+            await(outbound, started, context, call);
             return await(call.response, started, context, call);
         } catch (InterruptedException | RuntimeException | Error error) {
             abandon(id, method, outbound);
             throw error;
         } catch (IOException error) {
-            if (!call.response.isDone()) abandon(id, method, outbound);
+            if (!call.response.isDone() || call.transportFailure) abandon(id, method, outbound);
             throw error;
         } finally {
             pending.remove(id, call);
+            transport.cancelRequest(id);
         }
     }
 
     void notify(String method, ObjectNode params) throws IOException, InterruptedException {
         long started = System.nanoTime();
-        Outbound outbound = enqueue(message(method, params), started);
+        var outbound = send(message(method, params));
         try {
-            await(outbound.written(), started, null, null);
+            await(outbound, started, null, null);
         } catch (IOException | InterruptedException error) {
             close();
             throw error;
@@ -105,23 +88,14 @@ final class McpConnection implements AutoCloseable {
     }
 
     private static ObjectNode message(String method, ObjectNode params) {
-        var message = JSON.createObjectNode().put("jsonrpc", "2.0").put("method", method);
-        message.set("params", params == null ? JSON.createObjectNode() : params.deepCopy());
+        var message = McpJson.object().put("jsonrpc", "2.0").put("method", method);
+        message.set("params", params == null ? McpJson.object() : params.deepCopy());
         return message;
     }
 
-    private Outbound enqueue(ObjectNode message, long started) throws IOException {
+    private CompletableFuture<Void> send(ObjectNode message) throws McpException {
         if (closed.get()) throw new McpException("MCP connection is closed");
-        byte[] bytes = JSON.writeValueAsBytes(message);
-        if (bytes.length > MAX_MESSAGE_BYTES) throw new McpException("MCP message exceeds size limit");
-        var outbound = new Outbound(bytes, started, new CompletableFuture<>());
-        if (!writes.offer(outbound)) {
-            var failure = new McpException("MCP write queue is full");
-            close(failure);
-            throw failure;
-        }
-        if (closed.get()) outbound.written().completeExceptionally(new McpException("MCP connection is closed"));
-        return outbound;
+        return transport.send(message);
     }
 
     private <T> T await(CompletableFuture<T> future, long started, ToolContext context, Pending call)
@@ -139,7 +113,8 @@ final class McpConnection implements AutoCloseable {
             } catch (TimeoutException ignored) {
                 // Periodically check caller cancellation even when the server is silent.
             } catch (ExecutionException error) {
-                throw (IOException) error.getCause();
+                if (error.getCause() instanceof McpException safe) throw safe;
+                throw new McpException("MCP transport failed");
             }
         }
     }
@@ -156,100 +131,31 @@ final class McpConnection implements AutoCloseable {
         else if (Thread.interrupted()) throw new InterruptedException("MCP request interrupted");
     }
 
-    private void abandon(String id, String method, Outbound outbound) {
+    private void abandon(String id, String method, CompletableFuture<Void> outbound) {
         pending.remove(id);
-        if ("initialize".equals(method) || outbound == null || !outbound.written().isDone()) {
+        transport.cancelRequest(id);
+        if ("initialize".equals(method) || outbound == null) {
             close();
             return;
         }
         try {
-            enqueue(message("notifications/cancelled", JSON.createObjectNode().put("requestId", id)),
-                    System.nanoTime());
+            send(message("notifications/cancelled", McpJson.object().put("requestId", id)))
+                    .whenComplete((ignored, error) -> {
+                        if (error != null) close(new McpException("MCP cancellation could not be sent"));
+                    });
         } catch (IOException ignored) {
             close();
         }
     }
 
-    private void writeLoop() {
-        Outbound active = null;
-        try {
-            while (!closed.get()) {
-                active = writes.take();
-                activeWrite.set(active);
-                if (closed.get()) throw new McpException("MCP connection is closed");
-                if (System.nanoTime() - active.started() >= timeoutNanos) {
-                    throw new McpException("MCP write timed out");
-                }
-                process.getOutputStream().write(active.bytes());
-                process.getOutputStream().write('\n');
-                process.getOutputStream().flush();
-                active.written().complete(null);
-                activeWrite.set(null);
-                active = null;
-            }
-        } catch (McpException error) {
-            close(error);
-        } catch (IOException error) {
-            close(new McpException("MCP write failed"));
-        } catch (InterruptedException error) {
-            close(new McpException("MCP writer interrupted"));
-        } finally {
-            close();
-        }
+    private void receive(JsonNode message) {
+        if (closed.get()) return;
+        try { route(message); }
+        catch (McpException error) { close(error); }
+        catch (RuntimeException error) { close(new McpException("Invalid MCP message")); }
     }
 
-    private void watchWrites() {
-        try {
-            while (!closed.get()) {
-                Outbound active = activeWrite.get();
-                if (active != null && System.nanoTime() - active.started() >= timeoutNanos) {
-                    close(new McpException("MCP write timed out"));
-                    return;
-                }
-                Thread.sleep(50);
-            }
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            close();
-        }
-    }
-
-    private void readLoop() {
-        try (var input = process.getInputStream()) {
-            var line = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                for (int index = 0; index < count; index++) {
-                    if (buffer[index] == '\n') {
-                        String text = StandardCharsets.UTF_8.newDecoder()
-                                .onMalformedInput(CodingErrorAction.REPORT)
-                                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                                .decode(ByteBuffer.wrap(line.toByteArray())).toString();
-                        JsonNode message = JSON.readTree(text);
-                        line.reset();
-                        receive(message);
-                    } else {
-                        if (line.size() >= MAX_MESSAGE_BYTES) throw new McpException("MCP message exceeds size limit");
-                        line.write(buffer[index]);
-                    }
-                }
-            }
-            throw new McpException(line.size() == 0 ? "MCP server closed its output" : "Incomplete MCP message at end of stream");
-        } catch (McpException error) {
-            close(error);
-        } catch (CharacterCodingException error) {
-            close(new McpException("Invalid MCP UTF-8 message"));
-        } catch (JsonProcessingException error) {
-            close(new McpException("Invalid MCP JSON message"));
-        } catch (IOException error) {
-            close(new McpException("MCP read failed"));
-        } catch (RuntimeException error) {
-            close(new McpException("Invalid MCP message"));
-        }
-    }
-
-    private void receive(JsonNode message) throws IOException {
+    private void route(JsonNode message) throws McpException {
         if (message == null || !message.isObject() || !"2.0".equals(message.path("jsonrpc").asText())) {
             throw new McpException("Invalid MCP JSON-RPC message");
         }
@@ -258,11 +164,13 @@ final class McpConnection implements AutoCloseable {
             if (!message.get("method").isTextual()) throw new McpException("Invalid MCP method");
             if (id != null) {
                 if (!validId(id)) throw new McpException("Invalid MCP request ID");
-                var reply = JSON.createObjectNode().put("jsonrpc", "2.0");
+                var reply = McpJson.object().put("jsonrpc", "2.0");
                 reply.set("id", id);
-                if ("ping".equals(message.get("method").textValue())) reply.set("result", JSON.createObjectNode());
-                else reply.set("error", JSON.createObjectNode().put("code", -32601).put("message", "Method not found"));
-                enqueue(reply, System.nanoTime());
+                if ("ping".equals(message.get("method").textValue())) reply.set("result", McpJson.object());
+                else reply.set("error", McpJson.object().put("code", -32601).put("message", "Method not found"));
+                send(reply).whenComplete((ignored, error) -> {
+                    if (error != null) close(new McpException("MCP server response could not be sent"));
+                });
             } else if ("notifications/progress".equals(message.get("method").textValue())) {
                 JsonNode params = message.path("params");
                 JsonNode token = params.get("progressToken");
@@ -296,45 +204,32 @@ final class McpConnection implements AutoCloseable {
         return id.isTextual() || id.isIntegralNumber();
     }
 
-    @Override
-    public void close() {
-        close(new McpException("MCP connection is closed"));
+    private void failed(String id, McpException failure) {
+        if (id == null) {
+            close(failure);
+        } else {
+            var call = pending.get(id);
+            if (call != null) {
+                call.transportFailure = true;
+                call.response.completeExceptionally(failure);
+            }
+        }
     }
+
+    @Override
+    public void close() { close(new McpException("MCP connection is closed")); }
 
     private void close(McpException failure) {
         if (closed.compareAndSet(false, true)) {
             pending.values().forEach(call -> call.response.completeExceptionally(failure));
-            Outbound queued;
-            while ((queued = writes.poll()) != null) queued.written().completeExceptionally(failure);
-            Outbound active = activeWrite.get();
-            if (active != null) active.written().completeExceptionally(failure);
-            if (Thread.currentThread() != writer) writer.interrupt();
-            // Closing a pipe can wait for an active writer. Keep that wait off the caller.
-            Thread.ofVirtual().name("half-mcp-close-input").start(() -> {
-                try { process.getOutputStream().close(); } catch (IOException ignored) { }
-            });
         }
-        boolean interrupted = false;
-        try {
-            if (!process.waitFor(100, TimeUnit.MILLISECONDS)) {
-                process.toHandle().destroy();
-                if (!process.waitFor(100, TimeUnit.MILLISECONDS)) {
-                    process.toHandle().destroyForcibly();
-                    process.waitFor(100, TimeUnit.MILLISECONDS);
-                }
-            }
-        } catch (InterruptedException error) {
-            interrupted = true;
-            process.toHandle().destroyForcibly();
-        } finally {
-            if (interrupted) Thread.currentThread().interrupt();
-        }
+        transport.close();
     }
 
     private static final class Pending {
+        private volatile boolean transportFailure;
         private final CompletableFuture<JsonNode> response = new CompletableFuture<>();
         private final AtomicReference<JsonNode> progress = new AtomicReference<>();
     }
 
-    private record Outbound(byte[] bytes, long started, CompletableFuture<Void> written) { }
 }
