@@ -26,7 +26,7 @@ import java.util.function.Consumer;
 
 import static io.github.hi.neason.half.agent.AgentResult.StopReason.*;
 
-/** 同步循环实现；仅保存配置，运行状态全部留在单次调用中。 */
+/** 同步与流式入口共用的循环；仅保存配置，运行状态留在单次调用中。 */
 final class AgentLoop {
     private final ChatModel model;
     private final ToolRegistry tools;
@@ -47,6 +47,16 @@ final class AgentLoop {
 
     AgentResult run(List<ChatMessage> history, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress)
             throws InterruptedException {
+        return run(history, cancelled, onProgress, null);
+    }
+
+    AgentResult stream(List<ChatMessage> history, BooleanSupplier cancelled, Consumer<AgentEvent> events)
+            throws InterruptedException {
+        return run(history, cancelled, ignored -> { }, Objects.requireNonNull(events, "events"));
+    }
+
+    private AgentResult run(List<ChatMessage> history, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress,
+                            Consumer<AgentEvent> events) throws InterruptedException {
         var messages = new ArrayList<>(history);
         var seenCallIds = validateHistory(messages);
         var results = new ArrayList<ToolResult>();
@@ -56,8 +66,12 @@ final class AgentLoop {
             checkCancelled(cancelled);
             var request = new ChatRequest(messages, maxOutputTokens, tools.definitions(), modelOptions);
             modelCalls++;
+            int turn = modelCalls;
+            if (events != null) events.accept(new AgentEvent.TurnStarted(turn));
+            checkCancelled(cancelled);
             try {
-                response = model.chat(request);
+                response = events == null ? model.chat(request)
+                        : ModelTurnStream.call(model, request, event -> events.accept(new AgentEvent.Model(turn, event)));
             } catch (IOException error) {
                 checkCancelled(cancelled);
                 var status = error instanceof ModelHttpException http ? OptionalInt.of(http.statusCode()) : OptionalInt.empty();
@@ -83,9 +97,15 @@ final class AgentLoop {
             if (modelCalls == maxTurns) return result(MAX_TURNS, modelCalls, messages, results, response);
             for (var call : calls) {
                 checkCancelled(cancelled);
-                var toolResult = executor.execute(call, cancelled, onProgress);
+                if (events != null) events.accept(new AgentEvent.ToolStarted(turn, call));
+                checkCancelled(cancelled);
+                var toolResult = executor.execute(call, cancelled, progress -> {
+                    onProgress.accept(progress);
+                    if (events != null) events.accept(new AgentEvent.ToolProgressed(turn, progress));
+                });
                 results.add(toolResult);
                 messages.add(toolResult.toMessage());
+                if (events != null) events.accept(new AgentEvent.ToolCompleted(turn, toolResult));
             }
         }
         throw new IllegalStateException("Agent loop exhausted without a stop reason");

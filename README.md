@@ -19,7 +19,7 @@ HALF 是一个计划使用 Java 开发的轻量级 harness agent 框架，负责
 
 第一步是学习 LLM 的 HTTP 接口协议，已提供 Java 模型抽象和 OpenAI Chat Completions、Responses 和 Anthropic Messages 三种文本与工具调用适配器，支持完整响应与 SSE 流式调用。使用 Java 21+、Maven、JDK `HttpClient` 和 Jackson；JUnit 仅用于测试。
 
-当前支持文本/图片/文件输入、拒绝和推理内容、结构化输出配置、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具模块已支持显式注册、参数解析、顺序执行、调用上下文与进度、错误分类、宿主结果详情及输出裁剪；已提供同步 AgentLoop 和 `Agent.builder()` 门面。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
+当前支持文本/图片/文件输入、拒绝和推理内容、结构化输出配置、工具声明与结果回填、参数分片聚合，以及 `Flow.Publisher<ModelEvent>` 事件流。上层可控制需求量与取消；原文本回调接口继续可用。工具模块已支持显式注册、参数解析、顺序执行、调用上下文与进度、错误分类、宿主结果详情及输出裁剪；已提供共用循环规则的同步／流式 AgentLoop、`Flow.Publisher<AgentEvent>` 和 `Agent.builder()` 门面。“OpenAI 兼容”服务需符合当前适配器支持的字段，不能视为所有厂商都已验证。
 
 另外提供官方 JSON/SSE 客户端及 Responses、Chat Completions 的资源查询、删除等配套端点，完整覆盖清单和限制见 [官方协议覆盖](docs/official-api.md)。
 
@@ -82,7 +82,7 @@ if (result.completed()) System.out.println(result.text());
 else System.out.println(result.stopReason());
 ```
 
-每次 `run` 使用独立历史。Agent 自动记录模型消息、执行工具并回填结果，再发起下一次模型请求；达到轮次上限时停止。模型和工具的关闭由宿主负责。首版为同步调用，详细约定见 [Agent 门面与循环](docs/agent.md)。
+每次 `run` 使用独立历史。Agent 自动记录模型消息、执行工具并回填结果，再发起下一次模型请求；达到轮次上限时停止。模型和工具的关闭由宿主负责。可通过 `agent.stream(input)` 订阅模型增量、工具进度和最终结果，详细约定见 [Agent 门面与循环](docs/agent.md)。
 
 离线体验完整闭环（假模型与真实 Java 工具）：
 
@@ -101,7 +101,7 @@ mvn compile exec:java -Dexec.mainClass=io.github.hi.neason.half.examples.AgentEx
 1. 自行实现模型接口与协议适配器（已实现）。
 2. 扩展多协议及流式响应，理解统一模型抽象（已实现当前三种协议）。
 3. 实现工具注册、参数校验与执行，连接调用和结果（已实现）。
-4. 构建同步 Agent 循环与门面，提供轮次上限、明确停止原因及边界取消（已实现）。
+4. 构建同步／流式 Agent 循环与门面，提供轮次上限、明确停止原因、事件订阅及取消（已实现）。
 5. 根据学习需求扩展上下文管理、会话持久化和多 Agent 协作。
 
 ## 文档
