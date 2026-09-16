@@ -109,3 +109,9 @@ mvn compile exec:java -Dexec.mainClass=io.github.hi.neason.half.examples.ToolCon
 ```
 
 工具测试覆盖注册快照、严格参数解析、结果关联、顺序执行、重复 ID 预检、错误分类以及中断取消。`ToolConversationTest` 用假模型完成两次请求，验证 Java 加法结果回填和 Responses 回放状态保留，无需真实模型或密钥。
+
+## 显式错误结果与 MCP
+
+需要保留可供模型纠错的工具输出时，可返回 `new ToolOutput(text, details, true)`。执行器将其记录为 `EXECUTION_FAILED` 并保留文本和宿主详情；旧的一参、两参构造仍默认为成功。普通异常沿用安全的通用错误文本。
+
+MCP 工具通过 `McpClient.tools(namespace)` 适配为同一 `Tool` 接口，复用注册、进度、取消和 Agent 循环，详见 [MCP 工具客户端](mcp.md)。

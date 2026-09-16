@@ -68,3 +68,9 @@ JDK 标准库优先；JSON 编解码、HTTP 传输等基础能力可以按需使
 两种流式入口共用 `SseParser` 的字段解析。`ModelStream` 接收 JDK 拆分后的行并交付模型事件；原始 API 流通过 `SseFrameReader` 有界读取字符并交付原始 SSE 事件。订阅调度和协议终止判定各自保留：模型入口必须得到完整模型结果，原始 Responses 流则保留失败终态供调用方判断。
 
 通用消息以 `ReplayState` 标明快照所属协议，快照字符串由对应适配器解释。切换协议时调用方可显式移除回放状态；内容块本身仍须满足目标协议约束，详见 [模型内容与回放](official-api.md#模型内容与事件)。
+
+## MCP 接入边界
+
+`mcp` 包作为 MCP `2025-11-25` stdio Client，以原生 Java 子进程和 JSON-RPC 连接 Server。`McpConnection` 管理消息关联、传输、取消和关闭，`McpClient` 管理握手、能力检查、分页工具发现与调用。远端工具通过 `ContextualTool` 适配到现有注册表，AgentLoop 无需依赖 MCP 协议。
+
+宿主负责配置与关闭 Client，并通过 `Agent.builder().tools(client.tools(namespace))` 显式注册发现的工具。MCP `isError` 通过 `ToolOutput.isError` 转为失败结果，文本交给模型，原始内容与结构化结果保存在宿主详情。版本和未实现范围见 [MCP 工具客户端](mcp.md)。

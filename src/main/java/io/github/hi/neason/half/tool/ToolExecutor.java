@@ -84,7 +84,8 @@ public final class ToolExecutor {
         context.rethrowObserverFailure();
         context.checkCancelled();
         if (output == null) return failure(call, ToolResult.Status.EXECUTION_FAILED);
-        return new ToolResult(call.id(), call.name(), ToolResult.Status.SUCCESS,
+        return new ToolResult(call.id(), call.name(),
+                output.isError() ? ToolResult.Status.EXECUTION_FAILED : ToolResult.Status.SUCCESS,
                 ToolOutput.limit(output.text(), maxOutputCharacters), output.details(),
                 output.text().length() > maxOutputCharacters);
     }

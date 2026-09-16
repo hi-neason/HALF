@@ -5,14 +5,16 @@ import com.fasterxml.jackson.databind.node.NullNode;
 
 import java.util.Objects;
 
-/** 模型可见文本与宿主专用结构化详情；JSON 在输入和读取时均复制。 */
-public record ToolOutput(String text, JsonNode details) {
+/** 模型可见文本、宿主详情及显式执行错误；JSON 在输入和读取时均复制。 */
+public record ToolOutput(String text, JsonNode details, boolean isError) {
     public ToolOutput {
         Objects.requireNonNull(text, "text");
         details = copyDetails(details);
     }
 
-    public ToolOutput(String text) { this(text, NullNode.instance); }
+    public ToolOutput(String text, JsonNode details) { this(text, details, false); }
+
+    public ToolOutput(String text) { this(text, NullNode.instance, false); }
 
     @Override public JsonNode details() { return details.deepCopy(); }
 
