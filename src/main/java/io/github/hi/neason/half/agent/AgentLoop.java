@@ -4,22 +4,17 @@ import io.github.hi.neason.half.model.ChatMessage;
 import io.github.hi.neason.half.model.ChatModel;
 import io.github.hi.neason.half.model.ChatRequest;
 import io.github.hi.neason.half.model.ChatResponse;
-import io.github.hi.neason.half.model.ContentBlock;
 import io.github.hi.neason.half.model.ModelHttpException;
 import io.github.hi.neason.half.model.ModelOptions;
 import io.github.hi.neason.half.tool.ToolExecutor;
 import io.github.hi.neason.half.tool.ToolProgress;
 import io.github.hi.neason.half.tool.ToolRegistry;
-import io.github.hi.neason.half.tool.ToolResult;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -57,7 +52,7 @@ final class AgentLoop {
 
     private AgentResult run(List<ChatMessage> history, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress,
                             Consumer<AgentEvent> events) throws InterruptedException {
-        var state = new RunState(history);
+        var state = new LoopState(history);
         while (true) {
             try {
                 // 组装message，调用大模型
@@ -86,7 +81,7 @@ final class AgentLoop {
         }
     }
 
-    private ChatResponse callModel(RunState state, BooleanSupplier cancelled, Consumer<AgentEvent> events)
+    private ChatResponse callModel(LoopState state, BooleanSupplier cancelled, Consumer<AgentEvent> events)
             throws IOException, InterruptedException {
         checkCancelled(cancelled);
         var request = new ChatRequest(state.messages, maxOutputTokens, tools.definitions(), modelOptions);
@@ -105,7 +100,7 @@ final class AgentLoop {
      * maxTurns 是上限而非目标：正常完成立即停止，即使仍有预算；末轮完成也优先于预算耗尽。
      * 模型异常、取消和线程中断由调用边界处理，不依赖本方法。
      */
-    private Optional<AgentResult.StopReason> evaluateStopReason(RunState state) {
+    private Optional<AgentResult.StopReason> evaluateStopReason(LoopState state) {
         var calls = state.response.toolCalls();
         if (!isComplete(state.response.finishReason(), !calls.isEmpty())) return Optional.of(INCOMPLETE_RESPONSE);
         if (calls.isEmpty()) return Optional.of(COMPLETED);
@@ -119,7 +114,7 @@ final class AgentLoop {
         return Optional.empty();
     }
 
-    private void executeTools(RunState state, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress,
+    private void executeTools(LoopState state, BooleanSupplier cancelled, Consumer<ToolProgress> onProgress,
                               Consumer<AgentEvent> events) throws InterruptedException {
         int turn = state.modelCalls;
         for (var call : state.response.toolCalls()) {
@@ -138,24 +133,6 @@ final class AgentLoop {
         }
     }
 
-    /** 单次运行独享的上下文，避免同步与流式入口共享可变状态。 */
-    private static final class RunState {
-        private final List<ChatMessage> messages;
-        private final Set<String> seenCallIds;
-        private final List<ToolResult> toolResults = new ArrayList<>();
-        private ChatResponse response;
-        private int modelCalls;
-
-        private RunState(List<ChatMessage> history) {
-            messages = new ArrayList<>(history);
-            seenCallIds = validateHistory(messages);
-        }
-
-        private AgentResult result(AgentResult.StopReason reason, Optional<AgentResult.ModelFailure> failure) {
-            return new AgentResult(reason, modelCalls, messages, toolResults, Optional.ofNullable(response), failure);
-        }
-    }
-
     private static boolean isComplete(String finishReason, boolean hasTools) {
         return switch (finishReason) {
             case "completed" -> true;
@@ -163,28 +140,6 @@ final class AgentLoop {
             case "stop", "end_turn" -> !hasTools;
             default -> false;
         };
-    }
-
-    private static Set<String> validateHistory(List<ChatMessage> messages) {
-        var seen = new HashSet<String>();
-        var pending = new HashSet<String>();
-        for (var message : messages) {
-            if (message.role() == ChatMessage.Role.TOOL) {
-                if (!pending.remove(message.toolCallId())) {
-                    throw new IllegalArgumentException("History contains an unmatched tool result");
-                }
-                continue;
-            }
-            if (!pending.isEmpty()) throw new IllegalArgumentException("History contains unresolved tool calls");
-            for (var content : message.content()) {
-                if (content instanceof ContentBlock.ToolCall call) {
-                    if (!seen.add(call.id())) throw new IllegalArgumentException("History contains duplicate tool call ids");
-                    pending.add(call.id());
-                }
-            }
-        }
-        if (!pending.isEmpty()) throw new IllegalArgumentException("History contains unresolved tool calls");
-        return seen;
     }
 
     private static void checkCancelled(BooleanSupplier cancelled) throws InterruptedException {
